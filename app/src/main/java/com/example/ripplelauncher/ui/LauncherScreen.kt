@@ -218,7 +218,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
 
 @Composable
 private fun Header(query: String, vm: LauncherViewModel, onGo: () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(top = 40.dp, bottom = 20.dp)) {
+    Column(Modifier.fillMaxWidth().padding(top = 96.dp, bottom = 20.dp)) {
         Clock(Modifier.padding(start = 24.dp))
         Spacer(Modifier.height(20.dp))
         OutlinedTextField(
@@ -314,32 +314,32 @@ private fun AppRow(
                 .padding(
                     start = if (big) 24.dp else 12.dp,
                     end = 12.dp,
-                    top = if (big) 10.dp else 7.dp,
-                    bottom = if (big) 10.dp else 7.dp,
+                    top = if (big) 9.dp else 6.dp,
+                    bottom = if (big) 9.dp else 6.dp,
                 ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (!big) {
                 // Niagara-style: the group's letter sits beside its first app.
-                Box(Modifier.width(36.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.width(28.dp), contentAlignment = Alignment.Center) {
                     if (letter != null) {
                         Text(
                             letter.toString(),
                             color = Accent,
-                            style = MaterialTheme.typography.titleMedium.copy(shadow = TextShadow),
+                            style = MaterialTheme.typography.titleSmall.copy(shadow = TextShadow),
                         )
                     }
                 }
                 Spacer(Modifier.width(8.dp))
             }
-            Image(app.icon, contentDescription = null, modifier = Modifier.size(if (big) 40.dp else 34.dp))
-            Spacer(Modifier.width(16.dp))
+            Image(app.icon, contentDescription = null, modifier = Modifier.size(if (big) 28.dp else 22.dp))
+            Spacer(Modifier.width(12.dp))
             Text(
                 app.label,
                 color = Color.White,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                style = (if (big) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleMedium)
+                style = (if (big) MaterialTheme.typography.titleMedium.copy(fontSize = 18.sp) else MaterialTheme.typography.bodyMedium)
                     .copy(shadow = TextShadow),
             )
         }
