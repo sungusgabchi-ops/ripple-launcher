@@ -12,8 +12,8 @@ android {
         applicationId = "com.example.ripplelauncher"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2"
+        versionCode = 3
+        versionName = "0.3"
     }
 
     // A fixed key, so each new build installs over the old one without uninstalling.
@@ -27,8 +27,12 @@ android {
     }
 
     buildTypes {
+        // Optimized build: much smoother than a debug build.
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 

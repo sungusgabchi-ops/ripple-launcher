@@ -208,12 +208,7 @@ private fun Clock(modifier: Modifier = Modifier) {
     }
 }
 
-// --- App list ("drawer") -------------------------------------------------------
-
-private sealed interface DrawerRow {
-    data class Header(val letter: Char) : DrawerRow
-    data class App(val entry: AppEntry) : DrawerRow
-}
+// --- All apps: honeycomb ------------------------------------------------------
 
 @Composable
 private fun DrawerContent(
@@ -223,34 +218,12 @@ private fun DrawerContent(
     scrollRequest: ScrollRequest?,
     vm: LauncherViewModel,
 ) {
-    val listState = rememberLazyListState()
-
-    // Build either the full A–Z list with headers, or filtered search results.
-    val (rows, headerIndex) = remember<Pair<List<DrawerRow>, Map<Char, Int>>>(apps, query) {
-        if (query.isBlank()) {
-            val rows = mutableListOf<DrawerRow>()
-            val index = mutableMapOf<Char, Int>()
-            var last: Char? = null
-            for (app in apps) {
-                if (app.letter != last) {
-                    index[app.letter] = rows.size
-                    rows += DrawerRow.Header(app.letter)
-                    last = app.letter
-                }
-                rows += DrawerRow.App(app)
-            }
-            rows to index
-        } else {
+    val shown = remember(apps, query) {
+        if (query.isBlank()) apps else {
             val q = query.trim()
             apps.filter { it.label.contains(q, ignoreCase = true) }
                 .sortedBy { !it.label.startsWith(q, ignoreCase = true) } // prefix matches first
-                .map { DrawerRow.App(it) } to emptyMap()
         }
-    }
-
-    LaunchedEffect(scrollRequest) {
-        val req = scrollRequest ?: return@LaunchedEffect
-        headerIndex[req.letter]?.let { listState.scrollToItem(it) }
     }
 
     Column(
@@ -267,9 +240,7 @@ private fun DrawerContent(
             singleLine = true,
             shape = RoundedCornerShape(28.dp),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-            keyboardActions = KeyboardActions(onGo = {
-                (rows.firstOrNull() as? DrawerRow.App)?.let { vm.launch(it.entry) }
-            }),
+            keyboardActions = KeyboardActions(onGo = { shown.firstOrNull()?.let { vm.launch(it) } }),
             colors = OutlinedTextFieldDefaults.colors(
                 focusedTextColor = Color.White,
                 unfocusedTextColor = Color.White,
@@ -284,32 +255,22 @@ private fun DrawerContent(
                 .padding(start = 16.dp, end = 56.dp, top = 12.dp, bottom = 8.dp),
         )
 
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = PaddingValues(end = 48.dp, bottom = 24.dp),
-        ) {
-            items(rows, key = { row ->
-                when (row) {
-                    is DrawerRow.Header -> "header_${row.letter}"
-                    is DrawerRow.App -> row.entry.key
-                }
-            }) { row ->
-                when (row) {
-                    is DrawerRow.Header -> Text(
-                        row.letter.toString(),
-                        color = Accent,
-                        style = MaterialTheme.typography.labelLarge,
-                        modifier = Modifier.padding(start = 24.dp, top = 16.dp, bottom = 4.dp),
-                    )
-                    is DrawerRow.App -> AppRow(row.entry, row.entry.key in favoriteKeys, vm, big = false)
-                }
-            }
-        }
+        HoneycombGrid(
+            apps = shown,
+            favoriteKeys = favoriteKeys,
+            vm = vm,
+            jumpLetter = if (query.isBlank()) scrollRequest?.letter else null,
+            jumpId = scrollRequest?.id ?: 0L,
+            resetKey = query,
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(start = 8.dp, end = 44.dp), // room for the alphabet scroller
+        )
     }
 }
 
-// --- One app row, used on both screens ---------------------------------------
+// --- Home screen row ------------------------------------------------------------
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -349,28 +310,42 @@ private fun AppRow(
                     .copy(shadow = TextShadow),
             )
         }
+        AppMenu(app, isFavorite, vm, menuOpen, { menuOpen = false }, canMoveUp, canMoveDown)
+    }
+}
 
-        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-            DropdownMenuItem(
-                text = { Text(if (isFavorite) "Remove from home" else "Add to home") },
-                onClick = { menuOpen = false; vm.toggleFavorite(app) },
-            )
-            if (canMoveUp) DropdownMenuItem(
-                text = { Text("Move up") },
-                onClick = { menuOpen = false; vm.moveFavorite(app, -1) },
-            )
-            if (canMoveDown) DropdownMenuItem(
-                text = { Text("Move down") },
-                onClick = { menuOpen = false; vm.moveFavorite(app, 1) },
-            )
-            DropdownMenuItem(
-                text = { Text("App info") },
-                onClick = { menuOpen = false; vm.openAppInfo(app) },
-            )
-            DropdownMenuItem(
-                text = { Text("Uninstall") },
-                onClick = { menuOpen = false; vm.uninstall(app) },
-            )
-        }
+// --- Long-press menu, shared by the home list and the honeycomb ---------------
+
+@Composable
+internal fun AppMenu(
+    app: AppEntry,
+    isFavorite: Boolean,
+    vm: LauncherViewModel,
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    canMoveUp: Boolean = false,
+    canMoveDown: Boolean = false,
+) {
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        DropdownMenuItem(
+            text = { Text(if (isFavorite) "Remove from home" else "Add to home") },
+            onClick = { onDismiss(); vm.toggleFavorite(app) },
+        )
+        if (canMoveUp) DropdownMenuItem(
+            text = { Text("Move up") },
+            onClick = { onDismiss(); vm.moveFavorite(app, -1) },
+        )
+        if (canMoveDown) DropdownMenuItem(
+            text = { Text("Move down") },
+            onClick = { onDismiss(); vm.moveFavorite(app, 1) },
+        )
+        DropdownMenuItem(
+            text = { Text("App info") },
+            onClick = { onDismiss(); vm.openAppInfo(app) },
+        )
+        DropdownMenuItem(
+            text = { Text("Uninstall") },
+            onClick = { onDismiss(); vm.uninstall(app) },
+        )
     }
 }
