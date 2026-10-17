@@ -262,6 +262,7 @@ private fun DrawerContent(
             jumpLetter = if (query.isBlank()) scrollRequest?.letter else null,
             jumpId = scrollRequest?.id ?: 0L,
             resetKey = query,
+            grouped = query.isBlank(),
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
