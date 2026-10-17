@@ -80,8 +80,9 @@ private sealed interface Item {
     data object Header : Item { override val key = "header" }
     data object Hint : Item { override val key = "hint" }
     data object Gap : Item { override val key = "gap" }
-    data class Favorite(val app: AppEntry, val index: Int, val count: Int) : Item {
-        override val key = "fav_${app.key}"
+    /** One row of the favorites grid. Rows alternate 5 / 4 / 5 icons. */
+    data class FavoriteRow(val row: Int, val apps: List<AppEntry>, val start: Int, val total: Int) : Item {
+        override val key = "favrow_$row"
     }
     data class App(val app: AppEntry, val letter: Char?) : Item {
         override val key = "app_${app.key}"
@@ -108,7 +109,15 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val index = mutableMapOf(FAVORITES_MARK to 0)
         if (query.isBlank()) {
             if (favorites.isEmpty()) list += Item.Hint
-            favorites.forEachIndexed { i, app -> list += Item.Favorite(app, i, favorites.size) }
+            var start = 0
+            var row = 0
+            while (start < favorites.size) {
+                val size = if (row % 2 == 0) 5 else 4
+                val end = minOf(start + size, favorites.size)
+                list += Item.FavoriteRow(row, favorites.subList(start, end), start, favorites.size)
+                start = end
+                row++
+            }
             list += Item.Gap
             var last: Char? = null
             for (app in apps) {
@@ -171,21 +180,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         (items.firstOrNull { it is Item.App } as? Item.App)?.let { vm.launch(it.app) }
                     })
                     Item.Hint -> Text(
-                        "Long-press any app below to pin it here.",
+                        "Long-press any app below to add it to favorites.",
                         color = Color.White.copy(alpha = 0.7f),
                         style = MaterialTheme.typography.bodyLarge.copy(shadow = TextShadow),
                         modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
                     )
                     Item.Gap -> Spacer(Modifier.height(28.dp))
-                    is Item.Favorite -> AppRow(
-                        app = item.app,
-                        letter = null,
-                        isFavorite = true,
-                        vm = vm,
-                        big = true,
-                        canMoveUp = item.index > 0,
-                        canMoveDown = item.index < item.count - 1,
-                    )
+                    is Item.FavoriteRow -> FavoriteRow(item, vm)
                     is Item.App -> AppRow(
                         app = item.app,
                         letter = item.letter,
@@ -284,6 +285,63 @@ private fun Clock(modifier: Modifier = Modifier) {
     }
 }
 
+// --- Favorites grid: icons only, 5 / 4 / 5 like a honeycomb ----------------
+
+@Composable
+private fun FavoriteRow(item: Item.FavoriteRow, vm: LauncherViewModel) {
+    val narrow = item.row % 2 == 1
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // A 4-icon row is shifted half a cell so it sits between the icons above and below.
+        if (narrow) Spacer(Modifier.weight(0.5f))
+        val slots = if (narrow) 4 else 5
+        for (slot in 0 until slots) {
+            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                val app = item.apps.getOrNull(slot)
+                if (app != null) {
+                    val index = item.start + slot
+                    FavoriteIcon(app, vm, canMoveLeft = index > 0, canMoveRight = index < item.total - 1)
+                }
+            }
+        }
+        if (narrow) Spacer(Modifier.weight(0.5f))
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun FavoriteIcon(app: AppEntry, vm: LauncherViewModel, canMoveLeft: Boolean, canMoveRight: Boolean) {
+    var menuOpen by remember { mutableStateOf(false) }
+    val haptic = LocalHapticFeedback.current
+    Box {
+        Image(
+            app.icon,
+            contentDescription = app.label,
+            modifier = Modifier
+                .size(48.dp)
+                .combinedClickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = { vm.launch(app) },
+                    onLongClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        menuOpen = true
+                    },
+                ),
+        )
+        AppMenu(
+            app, isFavorite = true, vm = vm,
+            expanded = menuOpen, onDismiss = { menuOpen = false },
+            canMoveUp = canMoveLeft, canMoveDown = canMoveRight,
+            moveUpLabel = "Move left", moveDownLabel = "Move right",
+        )
+    }
+}
+
 // --- One app row: favorites are big, the A–Z list has a letter column ---------
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -314,32 +372,32 @@ private fun AppRow(
                 .padding(
                     start = if (big) 24.dp else 12.dp,
                     end = 12.dp,
-                    top = if (big) 9.dp else 6.dp,
-                    bottom = if (big) 9.dp else 6.dp,
+                    top = if (big) 9.dp else 7.dp,
+                    bottom = if (big) 9.dp else 7.dp,
                 ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (!big) {
                 // Niagara-style: the group's letter sits beside its first app.
-                Box(Modifier.width(28.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.width(32.dp), contentAlignment = Alignment.Center) {
                     if (letter != null) {
                         Text(
                             letter.toString(),
                             color = Accent,
-                            style = MaterialTheme.typography.titleSmall.copy(shadow = TextShadow),
+                            style = MaterialTheme.typography.titleMedium.copy(shadow = TextShadow),
                         )
                     }
                 }
                 Spacer(Modifier.width(8.dp))
             }
-            Image(app.icon, contentDescription = null, modifier = Modifier.size(if (big) 28.dp else 22.dp))
-            Spacer(Modifier.width(12.dp))
+            Image(app.icon, contentDescription = null, modifier = Modifier.size(if (big) 28.dp else 28.dp))
+            Spacer(Modifier.width(14.dp))
             Text(
                 app.label,
                 color = Color.White,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                style = (if (big) MaterialTheme.typography.titleMedium.copy(fontSize = 18.sp) else MaterialTheme.typography.bodyMedium)
+                style = (if (big) MaterialTheme.typography.titleMedium.copy(fontSize = 18.sp) else MaterialTheme.typography.bodyLarge)
                     .copy(shadow = TextShadow),
             )
         }
@@ -358,6 +416,8 @@ private fun AppMenu(
     onDismiss: () -> Unit,
     canMoveUp: Boolean = false,
     canMoveDown: Boolean = false,
+    moveUpLabel: String = "Move up",
+    moveDownLabel: String = "Move down",
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
         DropdownMenuItem(
@@ -365,11 +425,11 @@ private fun AppMenu(
             onClick = { onDismiss(); vm.toggleFavorite(app) },
         )
         if (canMoveUp) DropdownMenuItem(
-            text = { Text("Move up") },
+            text = { Text(moveUpLabel) },
             onClick = { onDismiss(); vm.moveFavorite(app, -1) },
         )
         if (canMoveDown) DropdownMenuItem(
-            text = { Text("Move down") },
+            text = { Text(moveDownLabel) },
             onClick = { onDismiss(); vm.moveFavorite(app, 1) },
         )
         DropdownMenuItem(
