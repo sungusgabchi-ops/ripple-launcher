@@ -37,8 +37,6 @@ data class AppEntry(
     val letter: Char,
 )
 
-enum class Screen { Home, Drawer }
-
 class LauncherViewModel(app: Application) : AndroidViewModel(app) {
 
     private val launcherApps = app.getSystemService(LauncherApps::class.java)
@@ -56,8 +54,9 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
             keys.mapNotNull { byKey[it] }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
-    private val _screen = MutableStateFlow(Screen.Home)
-    val screen: StateFlow<Screen> = _screen.asStateFlow()
+    // Bumped whenever the list should jump back to the top (Home pressed, app launched).
+    private val _homeEvents = MutableStateFlow(0)
+    val homeEvents: StateFlow<Int> = _homeEvents.asStateFlow()
 
     private val _query = MutableStateFlow("")
     val query: StateFlow<String> = _query.asStateFlow()
@@ -120,13 +119,9 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
 
     // --- Navigation -------------------------------------------------------
 
-    fun openDrawer() {
-        _screen.value = Screen.Drawer
-    }
-
     fun goHome() {
-        _screen.value = Screen.Home
         _query.value = ""
+        _homeEvents.value++
     }
 
     fun setQuery(q: String) {

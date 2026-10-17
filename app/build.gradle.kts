@@ -12,8 +12,8 @@ android {
         applicationId = "com.example.ripplelauncher"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.4"
+        versionCode = 5
+        versionName = "0.5"
     }
 
     // A fixed key, so each new build installs over the old one without uninstalling.
