@@ -184,6 +184,53 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         prefs.edit().putString(KEY_BACKDROP, b.name).apply()
     }
 
+    // --- Brightness -------------------------------------------------------
+
+    /** Screen brightness as 0..1 on a perceptual scale (feels even along the slider). */
+    fun readBrightness(): Float {
+        val raw = try {
+            android.provider.Settings.System.getInt(
+                getApplication<Application>().contentResolver,
+                android.provider.Settings.System.SCREEN_BRIGHTNESS,
+            )
+        } catch (_: Exception) {
+            128
+        }
+        return kotlin.math.sqrt(raw.coerceIn(0, 255) / 255f)
+    }
+
+    fun canChangeBrightness(): Boolean =
+        android.provider.Settings.System.canWrite(getApplication())
+
+    /** Opens the "Modify system settings" screen for this launcher. */
+    fun requestBrightnessPermission() {
+        val ctx = getApplication<Application>()
+        try {
+            ctx.startActivity(
+                Intent(android.provider.Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.parse("package:${ctx.packageName}"))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+            toast("Turn on \"Allow modifying system settings\" for Ripple")
+        } catch (_: Exception) {
+            toast("Couldn't open the permission screen")
+        }
+    }
+
+    fun setBrightness(level: Float) {
+        val resolver = getApplication<Application>().contentResolver
+        val raw = (level.coerceIn(0f, 1f).let { it * it } * 255f).toInt().coerceIn(1, 255)
+        try {
+            // Dragging the slider means "manual": switch off adaptive brightness first.
+            android.provider.Settings.System.putInt(
+                resolver,
+                android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE,
+                android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL,
+            )
+            android.provider.Settings.System.putInt(resolver, android.provider.Settings.System.SCREEN_BRIGHTNESS, raw)
+        } catch (_: Exception) {
+        }
+    }
+
     fun openCamera() {
         val ctx = getApplication<Application>()
         val tries = listOf(

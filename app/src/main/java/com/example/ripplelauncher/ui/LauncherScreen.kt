@@ -21,6 +21,10 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.SolidColor
 import com.example.ripplelauncher.Backdrop
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.example.ripplelauncher.R
 import androidx.compose.ui.res.painterResource
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -262,8 +266,63 @@ private fun Header(query: String, vm: LauncherViewModel, onGo: () -> Unit) {
             TopActions(vm)
         }
         Clock(Modifier.padding(start = 24.dp, top = 8.dp))
-        Spacer(Modifier.height(80.dp))
+        Spacer(Modifier.height(28.dp))
+        BrightnessBar(vm)
+        Spacer(Modifier.height(24.dp))
         SearchBar(query, vm, onGo)
+    }
+}
+
+/** Screen brightness slider. Asks for the system permission on first use. */
+@Composable
+private fun BrightnessBar(vm: LauncherViewModel) {
+    var level by remember { mutableFloatStateOf(vm.readBrightness()) }
+    var allowed by remember { mutableStateOf(vm.canChangeBrightness()) }
+
+    // Coming back from Settings (or after brightness changed elsewhere): refresh.
+    LifecycleResumeEffect(Unit) {
+        allowed = vm.canChangeBrightness()
+        level = vm.readBrightness()
+        onPauseOrDispose { }
+    }
+
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            painterResource(R.drawable.ic_brightness),
+            contentDescription = "Brightness",
+            tint = Color.White.copy(alpha = 0.6f),
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Slider(
+            value = level,
+            onValueChange = {
+                if (allowed) {
+                    level = it
+                    vm.setBrightness(it)
+                } else {
+                    vm.requestBrightnessPermission()
+                }
+            },
+            colors = SliderDefaults.colors(
+                thumbColor = Color.White,
+                activeTrackColor = Color.White.copy(alpha = 0.85f),
+                inactiveTrackColor = Color.White.copy(alpha = 0.22f),
+            ),
+            modifier = Modifier.weight(1f).height(32.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Icon(
+            painterResource(R.drawable.ic_brightness),
+            contentDescription = null,
+            tint = Color.White.copy(alpha = 0.9f),
+            modifier = Modifier.size(22.dp),
+        )
     }
 }
 
