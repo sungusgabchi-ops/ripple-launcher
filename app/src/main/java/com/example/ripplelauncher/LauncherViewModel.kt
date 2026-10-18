@@ -28,6 +28,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.Normalizer
 
+/** Launcher background over the wallpaper. */
+enum class Backdrop(val label: String) {
+    Wallpaper("Wallpaper"),
+    Dim("Dimmed wallpaper"),
+    Dark("Dark"),
+    Black("Black"),
+}
+
 data class AppEntry(
     val key: String,
     val label: String,
@@ -128,6 +136,28 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         _query.value = q
     }
 
+    // --- Appearance -------------------------------------------------------
+
+    private val _backdrop = MutableStateFlow(
+        runCatching { Backdrop.valueOf(prefs.getString(KEY_BACKDROP, null) ?: "") }.getOrDefault(Backdrop.Dim)
+    )
+    val backdrop: StateFlow<Backdrop> = _backdrop.asStateFlow()
+
+    fun setBackdrop(b: Backdrop) {
+        _backdrop.value = b
+        prefs.edit().putString(KEY_BACKDROP, b.name).apply()
+    }
+
+    fun openSystemSettings() {
+        try {
+            getApplication<Application>().startActivity(
+                Intent(android.provider.Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (e: Exception) {
+            toast("Couldn't open Settings")
+        }
+    }
+
     // --- App actions ------------------------------------------------------
 
     fun launch(app: AppEntry) {
@@ -205,5 +235,6 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
 
     private companion object {
         const val KEY_FAVORITES = "favorites"
+        const val KEY_BACKDROP = "backdrop"
     }
 }

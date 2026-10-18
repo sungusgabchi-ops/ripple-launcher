@@ -4,6 +4,23 @@ import android.content.Intent
 import android.provider.AlarmClock
 import android.text.format.DateFormat
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.SolidColor
+import com.example.ripplelauncher.Backdrop
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -164,7 +181,16 @@ fun LauncherScreen(vm: LauncherViewModel) {
         }
     }
 
-    Box(Modifier.fillMaxSize()) {
+    val backdrop by vm.backdrop.collectAsStateWithLifecycle()
+    val scrim = when (backdrop) {
+        Backdrop.Wallpaper -> Color.Transparent
+        Backdrop.Dim -> Color.Black.copy(alpha = 0.35f)
+        Backdrop.Dark -> Color.Black.copy(alpha = 0.7f)
+        Backdrop.Black -> Color.Black
+    }
+    val animatedScrim by animateColorAsState(scrim, tween(300), label = "backdrop")
+
+    Box(Modifier.fillMaxSize().background(animatedScrim)) {
         LazyColumn(
             state = listState,
             modifier = Modifier
@@ -220,30 +246,92 @@ fun LauncherScreen(vm: LauncherViewModel) {
 @Composable
 private fun Header(query: String, vm: LauncherViewModel, onGo: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(top = 96.dp, bottom = 20.dp)) {
-        Clock(Modifier.padding(start = 24.dp))
-        Spacer(Modifier.height(20.dp))
-        OutlinedTextField(
-            value = query,
-            onValueChange = vm::setQuery,
-            placeholder = { Text("Search") },
-            singleLine = true,
-            shape = RoundedCornerShape(28.dp),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-            keyboardActions = KeyboardActions(onGo = { onGo() }),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedTextColor = Color.White,
-                unfocusedTextColor = Color.White,
-                focusedBorderColor = Color.White.copy(alpha = 0.7f),
-                unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
-                cursorColor = Color.White,
-                focusedPlaceholderColor = Color.White.copy(alpha = 0.5f),
-                unfocusedPlaceholderColor = Color.White.copy(alpha = 0.5f),
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-        )
+        Row(verticalAlignment = Alignment.Top) {
+            Clock(Modifier.padding(start = 24.dp).weight(1f))
+            TopActions(vm)
+        }
+        Spacer(Modifier.height(24.dp))
+        SearchBar(query, vm, onGo)
     }
+}
+
+/** Top right: appearance menu and a shortcut to Android's Settings. */
+@Composable
+private fun TopActions(vm: LauncherViewModel) {
+    val backdrop by vm.backdrop.collectAsStateWithLifecycle()
+    var menuOpen by remember { mutableStateOf(false) }
+    Row(Modifier.padding(top = 8.dp)) {
+        Box {
+            IconButton(onClick = { menuOpen = true }) {
+                Icon(Icons.Rounded.Edit, contentDescription = "Appearance", tint = Color.White.copy(alpha = 0.85f))
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                Text(
+                    "Background",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = Accent,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+                Backdrop.entries.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(option.label) },
+                        trailingIcon = {
+                            if (option == backdrop) Icon(Icons.Rounded.Check, contentDescription = null, tint = Accent)
+                        },
+                        onClick = { vm.setBackdrop(option); menuOpen = false },
+                    )
+                }
+            }
+        }
+        IconButton(onClick = { vm.openSystemSettings() }) {
+            Icon(Icons.Rounded.Settings, contentDescription = "System settings", tint = Color.White.copy(alpha = 0.85f))
+        }
+    }
+}
+
+/** A raised, frosted pill so search stands apart from the app list. */
+@Composable
+private fun SearchBar(query: String, vm: LauncherViewModel, onGo: () -> Unit) {
+    val shape = RoundedCornerShape(28.dp)
+    BasicTextField(
+        value = query,
+        onValueChange = vm::setQuery,
+        singleLine = true,
+        textStyle = MaterialTheme.typography.bodyLarge.copy(color = Color.White),
+        cursorBrush = SolidColor(Accent),
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+        keyboardActions = KeyboardActions(onGo = { onGo() }),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .shadow(elevation = 10.dp, shape = shape, ambientColor = Color.Black, spotColor = Color.Black)
+            .background(
+                Brush.verticalGradient(listOf(Color(0xFF3A404A), Color(0xFF262A31))),
+                shape,
+            )
+            .border(1.dp, Color.White.copy(alpha = 0.10f), shape)
+            .height(52.dp),
+        decorationBox = { field ->
+            Row(
+                Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Rounded.Search, contentDescription = null, tint = Accent, modifier = Modifier.size(22.dp))
+                Spacer(Modifier.width(12.dp))
+                Box(Modifier.weight(1f)) {
+                    if (query.isEmpty()) {
+                        Text("Search apps", color = Color.White.copy(alpha = 0.5f), style = MaterialTheme.typography.bodyLarge)
+                    }
+                    field()
+                }
+                if (query.isNotEmpty()) {
+                    IconButton(onClick = { vm.setQuery("") }, modifier = Modifier.size(32.dp)) {
+                        Icon(Icons.Rounded.Close, contentDescription = "Clear", tint = Color.White.copy(alpha = 0.7f))
+                    }
+                }
+            }
+        },
+    )
 }
 
 @Composable
