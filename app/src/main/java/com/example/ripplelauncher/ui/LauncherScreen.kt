@@ -255,12 +255,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
 
 @Composable
 private fun Header(query: String, vm: LauncherViewModel, onGo: () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(top = 96.dp, bottom = 20.dp)) {
+    // Clock row sits right under the status bar; the gap below keeps search where it was.
+    Column(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 20.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Clock(Modifier.padding(start = 24.dp).weight(1f))
             TopActions(vm)
         }
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(116.dp))
         SearchBar(query, vm, onGo)
     }
 }
