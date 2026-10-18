@@ -293,7 +293,7 @@ private fun FavoriteRow(item: Item.FavoriteRow, vm: LauncherViewModel) {
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // A 4-icon row is shifted half a cell so it sits between the icons above and below.
@@ -322,7 +322,7 @@ private fun FavoriteIcon(app: AppEntry, vm: LauncherViewModel, canMoveLeft: Bool
             app.icon,
             contentDescription = app.label,
             modifier = Modifier
-                .size(48.dp)
+                .size(40.dp)
                 .combinedClickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -390,7 +390,7 @@ private fun AppRow(
                 }
                 Spacer(Modifier.width(8.dp))
             }
-            Image(app.icon, contentDescription = null, modifier = Modifier.size(if (big) 28.dp else 28.dp))
+            Image(app.icon, contentDescription = null, modifier = Modifier.size(32.dp))
             Spacer(Modifier.width(14.dp))
             Text(
                 app.label,
