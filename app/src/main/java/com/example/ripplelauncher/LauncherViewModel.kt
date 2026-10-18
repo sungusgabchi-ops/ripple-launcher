@@ -17,6 +17,11 @@ import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -49,6 +54,9 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
 
     private val launcherApps = app.getSystemService(LauncherApps::class.java)
     private val prefs = app.getSharedPreferences("launcher", Context.MODE_PRIVATE)
+    private val iconPx = (48 * app.resources.displayMetrics.density).toInt()
+    private val iconCache = IconCache(app, iconPx)
+    private val loadLock = Mutex()
 
     private val _apps = MutableStateFlow<List<AppEntry>>(emptyList())
     val apps: StateFlow<List<AppEntry>> = _apps.asStateFlow()
@@ -72,51 +80,79 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
     // Keeps the app list current when apps are installed, removed or updated.
     private val packageCallback = object : LauncherApps.Callback() {
         override fun onPackageRemoved(packageName: String, user: UserHandle) = refresh()
-        override fun onPackageAdded(packageName: String, user: UserHandle) = refresh()
-        override fun onPackageChanged(packageName: String, user: UserHandle) = refresh()
+        override fun onPackageAdded(packageName: String, user: UserHandle) = refresh(packageName)
+        override fun onPackageChanged(packageName: String, user: UserHandle) = refresh(packageName)
         override fun onPackagesAvailable(packageNames: Array<out String>, user: UserHandle, replacing: Boolean) = refresh()
         override fun onPackagesUnavailable(packageNames: Array<out String>, user: UserHandle, replacing: Boolean) = refresh()
     }
 
     init {
         launcherApps.registerCallback(packageCallback, Handler(Looper.getMainLooper()))
-        refresh()
+        // Show the saved list right away, then check for changes in the background.
+        viewModelScope.launch {
+            val saved = withContext(Dispatchers.IO) { loadSaved() }
+            if (_apps.value.isEmpty() && saved.isNotEmpty()) _apps.value = saved
+            refresh()
+        }
     }
 
     override fun onCleared() {
         launcherApps.unregisterCallback(packageCallback)
     }
 
-    fun refresh() {
+    /** Reloads the app list. [changedPackage] gets its icon redrawn even if its version didn't change. */
+    fun refresh(changedPackage: String? = null) {
         viewModelScope.launch {
-            _apps.value = withContext(Dispatchers.IO) { loadApps() }
+            if (changedPackage != null) iconCache.evictPackage(changedPackage)
+            val list = loadLock.withLock { withContext(Dispatchers.IO) { loadApps() } }
+            _apps.value = list
         }
     }
 
-    private fun loadApps(): List<AppEntry> {
+    private fun loadSaved(): List<AppEntry> =
+        iconCache.loadFromDisk().mapNotNull { c ->
+            val user = iconCache.userFor(c.userSerial) ?: return@mapNotNull null
+            AppEntry(c.key, c.label, c.component, user, c.bitmap.asImageBitmap(), letterFor(c.label))
+        }.sortedWith(appOrder)
+
+    private suspend fun loadApps(): List<AppEntry> = coroutineScope {
         val ctx = getApplication<Application>()
-        val iconPx = (48 * ctx.resources.displayMetrics.density).toInt()
         // Every profile, so work-profile apps show up too (with a badge).
-        return launcherApps.profiles.flatMap { user ->
-            launcherApps.getActivityList(null, user).map { info ->
-                val label = info.label.toString()
-                AppEntry(
-                    key = "${info.componentName.flattenToString()}#${user.hashCode()}",
-                    label = label,
-                    component = info.componentName,
-                    user = user,
-                    icon = info.getBadgedIcon(0).toBitmap(iconPx, iconPx).asImageBitmap(),
-                    letter = letterFor(label),
-                )
+        val activities = launcherApps.profiles.flatMap { user ->
+            launcherApps.getActivityList(null, user).map { user to it }
+        }.filter { it.second.componentName.packageName != ctx.packageName }
+
+        // Reuse cached icons; draw only new or updated apps, several at a time.
+        val cached = activities.map { (user, info) ->
+            async(Dispatchers.Default) {
+                val key = "${info.componentName.flattenToString()}#${user.hashCode()}"
+                val version = versionOf(info.componentName.packageName, user, info.firstInstallTime)
+                val bitmap = iconCache.get(key, version)
+                    ?: info.getBadgedIcon(0).toBitmap(iconPx, iconPx)
+                IconCache.Cached(
+                    key, info.label.toString(), info.componentName,
+                    iconCache.serialFor(user), version, bitmap,
+                ) to user
             }
-        }
-            .filter { it.component.packageName != ctx.packageName }
-            .sortedWith(
-                compareBy<AppEntry> { if (it.letter == '#') 0 else 1 }
-                    .thenBy { it.letter }
-                    .thenBy(String.CASE_INSENSITIVE_ORDER) { it.label }
-            )
+        }.awaitAll()
+
+        iconCache.save(cached.map { it.first })
+
+        cached.map { (c, user) ->
+            AppEntry(c.key, c.label, c.component, user, c.bitmap.asImageBitmap(), letterFor(c.label))
+        }.sortedWith(appOrder)
     }
+
+    /** Changes whenever the app is updated, so its icon gets redrawn. */
+    private fun versionOf(packageName: String, user: UserHandle, firstInstall: Long): Long {
+        val updated = if (user == android.os.Process.myUserHandle()) {
+            runCatching {
+                getApplication<Application>().packageManager.getPackageInfo(packageName, 0).lastUpdateTime
+            }.getOrDefault(0L)
+        } else 0L
+        return if (updated != 0L) updated else firstInstall
+    }
+
 
     private fun letterFor(label: String): Char {
         // Strip accents so "Éclair" files under E.
@@ -236,5 +272,10 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
     private companion object {
         const val KEY_FAVORITES = "favorites"
         const val KEY_BACKDROP = "backdrop"
+
+        // In the companion so it's ready before init{} reads the saved list.
+        val appOrder = compareBy<AppEntry> { if (it.letter == '#') 0 else 1 }
+            .thenBy { it.letter }
+            .thenBy(String.CASE_INSENSITIVE_ORDER) { it.label }
     }
 }
