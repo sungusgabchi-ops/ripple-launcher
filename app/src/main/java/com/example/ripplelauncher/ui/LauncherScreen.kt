@@ -44,6 +44,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.zIndex
 import kotlin.math.roundToInt
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -255,13 +256,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
 
 @Composable
 private fun Header(query: String, vm: LauncherViewModel, onGo: () -> Unit) {
-    // Clock row sits right under the status bar; the gap below keeps search where it was.
+    // Top row: camera, theme and settings. Next line: time and date.
     Column(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 20.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Clock(Modifier.padding(start = 24.dp).weight(1f))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             TopActions(vm)
         }
-        Spacer(Modifier.height(116.dp))
+        Clock(Modifier.padding(start = 24.dp, top = 4.dp))
+        Spacer(Modifier.height(92.dp))
         SearchBar(query, vm, onGo)
     }
 }
