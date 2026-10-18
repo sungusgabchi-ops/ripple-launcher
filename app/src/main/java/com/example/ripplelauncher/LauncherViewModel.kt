@@ -255,6 +255,12 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         saveFavorites(list)
     }
 
+    /** Saves a new favorites order from dragging. Keeps any favorites not currently shown. */
+    fun setFavoriteOrder(keys: List<String>) {
+        val hidden = _favoriteKeys.value.filter { it !in keys }
+        saveFavorites(keys + hidden)
+    }
+
     private fun loadFavorites(): List<String> =
         prefs.getString(KEY_FAVORITES, null)
             ?.split('\n')

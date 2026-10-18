@@ -26,6 +26,22 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateIntOffsetAsState
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.offset
+import androidx.compose.runtime.key
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.zIndex
+import kotlin.math.roundToInt
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -97,9 +113,9 @@ private sealed interface Item {
     data object Header : Item { override val key = "header" }
     data object Hint : Item { override val key = "hint" }
     data object Gap : Item { override val key = "gap" }
-    /** One row of the favorites grid. Rows alternate 5 / 4 / 5 icons. */
-    data class FavoriteRow(val row: Int, val apps: List<AppEntry>, val start: Int, val total: Int) : Item {
-        override val key = "favrow_$row"
+    /** The favorites grid. Rows alternate 5 / 4 / 5 icons. */
+    data class Favorites(val apps: List<AppEntry>) : Item {
+        override val key = "favorites"
     }
     data class App(val app: AppEntry, val letter: Char?) : Item {
         override val key = "app_${app.key}"
@@ -126,15 +142,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val index = mutableMapOf(FAVORITES_MARK to 0)
         if (query.isBlank()) {
             if (favorites.isEmpty()) list += Item.Hint
-            var start = 0
-            var row = 0
-            while (start < favorites.size) {
-                val size = if (row % 2 == 0) 5 else 4
-                val end = minOf(start + size, favorites.size)
-                list += Item.FavoriteRow(row, favorites.subList(start, end), start, favorites.size)
-                start = end
-                row++
-            }
+            else list += Item.Favorites(favorites)
             list += Item.Gap
             var last: Char? = null
             for (app in apps) {
@@ -212,7 +220,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
                     )
                     Item.Gap -> Spacer(Modifier.height(28.dp))
-                    is Item.FavoriteRow -> FavoriteRow(item, vm)
+                    is Item.Favorites -> FavoriteGrid(item.apps, vm)
                     is Item.App -> AppRow(
                         app = item.app,
                         letter = item.letter,
@@ -374,59 +382,143 @@ private fun Clock(modifier: Modifier = Modifier) {
 }
 
 // --- Favorites grid: icons only, 5 / 4 / 5 like a honeycomb ----------------
+// Tap to open. Long-press and drag to reorder. Long-press without moving opens the menu.
 
-@Composable
-private fun FavoriteRow(item: Item.FavoriteRow, vm: LauncherViewModel) {
-    val narrow = item.row % 2 == 1
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        // A 4-icon row is shifted half a cell so it sits between the icons above and below.
-        if (narrow) Spacer(Modifier.weight(0.5f))
-        val slots = if (narrow) 4 else 5
-        for (slot in 0 until slots) {
-            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                val app = item.apps.getOrNull(slot)
-                if (app != null) {
-                    val index = item.start + slot
-                    FavoriteIcon(app, vm, canMoveLeft = index > 0, canMoveRight = index < item.total - 1)
-                }
-            }
+private val FavRowHeight = 60.dp
+private val FavIconSize = 40.dp
+
+/** Row and horizontal position (in cell widths) of favorite number [i]. */
+private fun slotOf(i: Int): Pair<Int, Float> {
+    var row = 0
+    var start = 0
+    while (true) {
+        val size = if (row % 2 == 0) 5 else 4
+        if (i < start + size) {
+            val col = i - start
+            // A 4-icon row is shifted half a cell so it sits between the rows above and below.
+            return row to (if (size == 5) col + 0.5f else col + 1f)
         }
-        if (narrow) Spacer(Modifier.weight(0.5f))
+        start += size
+        row++
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+private fun rowsFor(n: Int): Int = if (n == 0) 0 else slotOf(n - 1).first + 1
+
 @Composable
-private fun FavoriteIcon(app: AppEntry, vm: LauncherViewModel, canMoveLeft: Boolean, canMoveRight: Boolean) {
-    var menuOpen by remember { mutableStateOf(false) }
+private fun FavoriteGrid(favorites: List<AppEntry>, vm: LauncherViewModel) {
     val haptic = LocalHapticFeedback.current
-    Box {
-        Image(
-            app.icon,
-            contentDescription = app.label,
-            modifier = Modifier
-                .size(40.dp)
-                .combinedClickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = { vm.launch(app) },
-                    onLongClick = {
+    val density = LocalDensity.current
+
+    // Working order while dragging; resets whenever the saved favorites change.
+    var order by remember(favorites) { mutableStateOf(favorites) }
+    var dragKey by remember { mutableStateOf<String?>(null) }
+    var dragCenter by remember { mutableStateOf(Offset.Zero) }
+    var menuKey by remember { mutableStateOf<String?>(null) }
+
+    BoxWithConstraints(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp)
+            .height(FavRowHeight * rowsFor(order.size))
+    ) {
+        val cellW = with(density) { maxWidth.toPx() } / 5f
+        val rowH = with(density) { FavRowHeight.toPx() }
+        val half = with(density) { (FavIconSize / 2).toPx() }
+        val hitRadius = cellW * 0.5f
+
+        fun centerOf(i: Int): Offset {
+            val (row, x) = slotOf(i)
+            return Offset(x * cellW, (row + 0.5f) * rowH)
+        }
+        fun nearest(p: Offset): Int =
+            order.indices.minByOrNull { (centerOf(it) - p).getDistance() } ?: 0
+
+        val latestOrder by rememberUpdatedState(order)
+
+        Box(
+            Modifier
+                .fillMaxSize()
+                .pointerInput(cellW) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val current = latestOrder
+                        val hit = current.indices.firstOrNull {
+                            (centerOf(it) - down.position).getDistance() < hitRadius
+                        } ?: return@awaitEachGesture
+                        val app = current[hit]
+
+                        // 1 = released (tap), 2 = cancelled (e.g. list scrolled), 0 = held long enough
+                        var outcome = 0
+                        withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                            val up = waitForUpOrCancellation()
+                            outcome = if (up != null) { up.consume(); 1 } else 2
+                        }
+                        if (outcome == 1) { vm.launch(app); return@awaitEachGesture }
+                        if (outcome == 2) return@awaitEachGesture
+
+                        // Long press: pick the icon up.
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        menuOpen = true
-                    },
-                ),
-        )
-        AppMenu(
-            app, isFavorite = true, vm = vm,
-            expanded = menuOpen, onDismiss = { menuOpen = false },
-            canMoveUp = canMoveLeft, canMoveDown = canMoveRight,
-            moveUpLabel = "Move left", moveDownLabel = "Move right",
-        )
+                        val grab = centerOf(hit) - down.position
+                        dragKey = app.key
+                        dragCenter = centerOf(hit)
+                        var moved = false
+                        var total = Offset.Zero
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) { change.consume(); break }
+                            total += change.positionChange()
+                            if (!moved && total.getDistance() > viewConfiguration.touchSlop) moved = true
+                            if (moved) {
+                                dragCenter = change.position + grab
+                                val from = latestOrder.indexOfFirst { it.key == app.key }
+                                val to = nearest(dragCenter)
+                                if (from != -1 && to != from) {
+                                    order = latestOrder.toMutableList().apply { add(to, removeAt(from)) }
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                }
+                            }
+                            change.consume()
+                        }
+                        dragKey = null
+                        if (moved) vm.setFavoriteOrder(order.map { it.key })
+                        else menuKey = app.key
+                    }
+                }
+        ) {
+            order.forEachIndexed { i, app ->
+                key(app.key) {
+                    val dragging = app.key == dragKey
+                    val target = centerOf(i)
+                    val slot = IntOffset((target.x - half).roundToInt(), (target.y - half).roundToInt())
+                    val animated by animateIntOffsetAsState(slot, tween(180), label = "fav")
+                    val scale by animateFloatAsState(if (dragging) 1.2f else 1f, tween(120), label = "lift")
+                    Box(
+                        Modifier
+                            .offset {
+                                if (dragging) IntOffset(
+                                    (dragCenter.x - half).roundToInt(),
+                                    (dragCenter.y - half).roundToInt(),
+                                ) else animated
+                            }
+                            .zIndex(if (dragging) 1f else 0f)
+                    ) {
+                        Image(
+                            app.icon,
+                            contentDescription = app.label,
+                            modifier = Modifier
+                                .size(FavIconSize)
+                                .graphicsLayer { scaleX = scale; scaleY = scale },
+                        )
+                        AppMenu(
+                            app, isFavorite = true, vm = vm,
+                            expanded = menuKey == app.key, onDismiss = { menuKey = null },
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
