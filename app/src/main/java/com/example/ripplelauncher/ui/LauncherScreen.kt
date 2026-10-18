@@ -258,11 +258,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
 private fun Header(query: String, vm: LauncherViewModel, onGo: () -> Unit) {
     // Top row: camera, theme and settings. Next line: time and date.
     Column(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 20.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+        Row(Modifier.fillMaxWidth().padding(start = 12.dp), horizontalArrangement = Arrangement.Start) {
             TopActions(vm)
         }
-        Clock(Modifier.padding(start = 24.dp, top = 4.dp))
-        Spacer(Modifier.height(92.dp))
+        Clock(Modifier.padding(start = 24.dp, top = 8.dp))
+        Spacer(Modifier.height(80.dp))
         SearchBar(query, vm, onGo)
     }
 }
@@ -384,14 +384,14 @@ private fun Clock(modifier: Modifier = Modifier) {
         Text(
             time,
             color = Color.White,
-            fontSize = 15.sp,
+            fontSize = 26.sp,
             fontWeight = FontWeight.Medium,
             style = MaterialTheme.typography.bodyMedium.copy(shadow = TextShadow),
         )
         Text(
             "  ·  $date",
             color = Color.White.copy(alpha = 0.7f),
-            fontSize = 15.sp,
+            fontSize = 20.sp,
             style = MaterialTheme.typography.bodyMedium.copy(shadow = TextShadow),
         )
     }
