@@ -184,6 +184,22 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         prefs.edit().putString(KEY_BACKDROP, b.name).apply()
     }
 
+    fun openCamera() {
+        val ctx = getApplication<Application>()
+        val tries = listOf(
+            Intent(android.provider.MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA),
+            Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE),
+        )
+        for (intent in tries) {
+            try {
+                ctx.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                return
+            } catch (_: Exception) {
+            }
+        }
+        toast("Couldn't open the camera")
+    }
+
     fun openSystemSettings() {
         try {
             getApplication<Application>().startActivity(

@@ -21,6 +21,8 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.SolidColor
 import com.example.ripplelauncher.Backdrop
+import com.example.ripplelauncher.R
+import androidx.compose.ui.res.painterResource
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -254,7 +256,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
 @Composable
 private fun Header(query: String, vm: LauncherViewModel, onGo: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(top = 96.dp, bottom = 20.dp)) {
-        Row(verticalAlignment = Alignment.Top) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Clock(Modifier.padding(start = 24.dp).weight(1f))
             TopActions(vm)
         }
@@ -268,7 +270,15 @@ private fun Header(query: String, vm: LauncherViewModel, onGo: () -> Unit) {
 private fun TopActions(vm: LauncherViewModel) {
     val backdrop by vm.backdrop.collectAsStateWithLifecycle()
     var menuOpen by remember { mutableStateOf(false) }
-    Row(Modifier.padding(top = 8.dp)) {
+    Row(Modifier.padding(end = 4.dp)) {
+        IconButton(onClick = { vm.openCamera() }) {
+            Icon(
+                painterResource(R.drawable.ic_camera),
+                contentDescription = "Camera",
+                tint = Color.White.copy(alpha = 0.85f),
+                modifier = Modifier.size(22.dp),
+            )
+        }
         Box {
             IconButton(onClick = { menuOpen = true }) {
                 Icon(Icons.Rounded.Edit, contentDescription = "Appearance", tint = Color.White.copy(alpha = 0.85f))
@@ -352,10 +362,12 @@ private fun Clock(modifier: Modifier = Modifier) {
             delay(60_000L - System.currentTimeMillis() % 60_000L)
         }
     }
-    val time = DateFormat.getTimeFormat(context).format(now) // respects the 12/24h setting
-    val date = LocalDate.now().format(DateTimeFormatter.ofPattern("EEEE, MMMM d"))
+    // One line, e.g. "9:46 AM · Sun, Oct 18". Shows AM/PM unless the phone is set to 24-hour.
+    val pattern = if (DateFormat.is24HourFormat(context)) "H:mm" else "h:mm a"
+    val time = java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault()).format(now)
+    val date = LocalDate.now().format(DateTimeFormatter.ofPattern("EEE, MMM d"))
 
-    Column(
+    Row(
         modifier.clickable(
             interactionSource = remember { MutableInteractionSource() },
             indication = null,
@@ -365,18 +377,20 @@ private fun Clock(modifier: Modifier = Modifier) {
             } catch (_: Exception) {
             }
         },
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             time,
             color = Color.White,
-            fontSize = 56.sp,
-            fontWeight = FontWeight.Light,
-            style = MaterialTheme.typography.displayLarge.copy(shadow = TextShadow),
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Medium,
+            style = MaterialTheme.typography.bodyMedium.copy(shadow = TextShadow),
         )
         Text(
-            date,
-            color = Color.White.copy(alpha = 0.85f),
-            style = MaterialTheme.typography.titleMedium.copy(shadow = TextShadow),
+            "  ·  $date",
+            color = Color.White.copy(alpha = 0.7f),
+            fontSize = 15.sp,
+            style = MaterialTheme.typography.bodyMedium.copy(shadow = TextShadow),
         )
     }
 }
