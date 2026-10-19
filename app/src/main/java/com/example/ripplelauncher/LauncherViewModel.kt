@@ -408,6 +408,19 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
 
     // --- Favorites --------------------------------------------------------
 
+    // --- Less used ----------------------------------------------------------
+    // Apps moved out of the A–Z list into a collapsible section at the end.
+
+    private val _lessUsedKeys = MutableStateFlow(prefs.getStringSet(KEY_LESS_USED, emptySet())!!.toSet())
+    val lessUsedKeys: StateFlow<Set<String>> = _lessUsedKeys.asStateFlow()
+
+    fun toggleLessUsed(app: AppEntry) {
+        val current = _lessUsedKeys.value
+        val next = if (app.key in current) current - app.key else current + app.key
+        _lessUsedKeys.value = next
+        prefs.edit().putStringSet(KEY_LESS_USED, next).apply()
+    }
+
     fun toggleFavorite(app: AppEntry) {
         val current = _favoriteKeys.value
         saveFavorites(if (app.key in current) current - app.key else current + app.key)
@@ -446,6 +459,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         const val KEY_FAVORITES = "favorites"
         const val KEY_BACKDROP = "backdrop"
         const val KEY_WEATHER = "weather"
+        const val KEY_LESS_USED = "less_used"
 
         // In the companion so it's ready before init{} reads the saved list.
         val appOrder = compareBy<AppEntry> { if (it.letter == '#') 0 else 1 }

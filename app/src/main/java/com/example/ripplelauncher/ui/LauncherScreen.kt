@@ -23,6 +23,10 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.SolidColor
 import com.example.ripplelauncher.Backdrop
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -118,6 +122,9 @@ import java.util.Date
 /** The scroller's first entry: jumps back to the favorites at the top. */
 private const val FAVORITES_MARK = '•'
 
+/** The scroller's last entry: jumps to the "Less used" section. */
+private const val LESS_USED_MARK = '⋯'
+
 /** Everything in the single Niagara-style list, top to bottom. */
 private sealed interface Item {
     val key: String
@@ -129,8 +136,12 @@ private sealed interface Item {
     data class Favorites(val apps: List<AppEntry>) : Item {
         override val key = "favorites"
     }
-    data class App(val app: AppEntry, val letter: Char?) : Item {
+    data class App(val app: AppEntry, val letter: Char?, val lessUsed: Boolean = false) : Item {
         override val key = "app_${app.key}"
+    }
+    /** Tap to expand or collapse the less-used apps below it. */
+    data class LessUsedHeader(val count: Int, val expanded: Boolean) : Item {
+        override val key = "less_used_header"
     }
 }
 
@@ -149,7 +160,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
 
     // Build the list: clock, favorites, then every app grouped by letter.
     // letterIndex maps each scroller letter to the list position it jumps to.
-    val (items, letterIndex) = remember(apps, favorites, query) {
+    val lessUsedKeys by vm.lessUsedKeys.collectAsStateWithLifecycle()
+    var lessUsedExpanded by rememberSaveable { mutableStateOf(false) }
+
+    val (items, letterIndex) = remember(apps, favorites, query, lessUsedKeys, lessUsedExpanded) {
         val list = mutableListOf<Item>(Item.Header)
         val index = mutableMapOf(FAVORITES_MARK to 0)
         if (query.isBlank()) {
@@ -157,13 +171,21 @@ fun LauncherScreen(vm: LauncherViewModel) {
             else list += Item.Favorites(favorites)
             list += Item.Gap
             var last: Char? = null
-            for (app in apps) {
+            val (lessUsed, main) = apps.partition { it.key in lessUsedKeys }
+            for (app in main) {
                 val first = app.letter != last
                 if (first) index[app.letter] = list.size
                 list += Item.App(app, if (first) app.letter else null)
                 last = app.letter
             }
+            // After Z: the collapsible "Less used" section.
+            if (lessUsed.isNotEmpty()) {
+                index[LESS_USED_MARK] = list.size
+                list += Item.LessUsedHeader(lessUsed.size, lessUsedExpanded)
+                if (lessUsedExpanded) lessUsed.forEach { list += Item.App(it, null, lessUsed = true) }
+            }
         } else {
+            // Search still finds every app, including less-used ones.
             val q = query.trim()
             apps.filter { it.label.contains(q, ignoreCase = true) }
                 .sortedBy { !it.label.startsWith(q, ignoreCase = true) } // prefix matches first
@@ -171,7 +193,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
         }
         list.toList() to index.toMap()
     }
-    val letters = remember(apps) { listOf(FAVORITES_MARK) + apps.map { it.letter }.distinct() }
+    val letters = remember(apps, lessUsedKeys) {
+        val (lessUsed, main) = apps.partition { it.key in lessUsedKeys }
+        listOf(FAVORITES_MARK) + main.map { it.letter }.distinct() + if (lessUsed.isNotEmpty()) listOf(LESS_USED_MARK) else emptyList()
+    }
 
     // Home pressed or an app launched: glide back to the top.
     LaunchedEffect(homeEvents) {
@@ -234,13 +259,16 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     )
                     Item.Gap -> Spacer(Modifier.height(28.dp))
                     is Item.Favorites -> FavoriteGrid(item.apps, vm)
-                    is Item.App -> AppRow(
-                        app = item.app,
-                        letter = item.letter,
-                        isFavorite = item.app.key in favoriteSet,
-                        vm = vm,
-                        big = false,
-                    )
+                    is Item.App -> Box(if (item.lessUsed) Modifier.alpha(0.75f) else Modifier) {
+                        AppRow(
+                            app = item.app,
+                            letter = item.letter,
+                            isFavorite = item.app.key in favoriteSet,
+                            vm = vm,
+                            big = false,
+                        )
+                    }
+                    is Item.LessUsedHeader -> LessUsedHeader(item) { lessUsedExpanded = !lessUsedExpanded }
                 }
             }
         }
@@ -747,6 +775,47 @@ private fun AppRow(
     }
 }
 
+// --- "Less used" section header, after Z ----------------------------------------
+
+@Composable
+private fun LessUsedHeader(item: Item.LessUsedHeader, onToggle: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 20.dp)
+            .clickable(onClick = onToggle),
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .height(1.dp)
+                .background(Color.White.copy(alpha = 0.15f)),
+        )
+        Row(
+            Modifier.padding(start = 20.dp, end = 12.dp, top = 14.dp, bottom = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "Less used",
+                color = Accent,
+                style = MaterialTheme.typography.titleSmall.copy(shadow = TextShadow),
+            )
+            Text(
+                "  ${item.count}",
+                color = Color.White.copy(alpha = 0.5f),
+                style = MaterialTheme.typography.titleSmall.copy(shadow = TextShadow),
+            )
+            Spacer(Modifier.weight(1f))
+            Icon(
+                if (item.expanded) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
+                contentDescription = if (item.expanded) "Collapse" else "Expand",
+                tint = Color.White.copy(alpha = 0.7f),
+            )
+        }
+    }
+}
+
 // --- Long-press menu ------------------------------------------------------------
 
 @Composable
@@ -773,6 +842,11 @@ private fun AppMenu(
         if (canMoveDown) DropdownMenuItem(
             text = { Text(moveDownLabel) },
             onClick = { onDismiss(); vm.moveFavorite(app, 1) },
+        )
+        val lessUsed by vm.lessUsedKeys.collectAsStateWithLifecycle()
+        DropdownMenuItem(
+            text = { Text(if (app.key in lessUsed) "Move back to A–Z list" else "Move to Less used") },
+            onClick = { onDismiss(); vm.toggleLessUsed(app) },
         )
         DropdownMenuItem(
             text = { Text("App info") },
