@@ -36,14 +36,17 @@ data class WeatherInfo(
         .toString()
 
     companion object {
-        fun fromJson(s: String?): WeatherInfo? = try {
-            val o = JSONObject(s ?: return null)
-            WeatherInfo(
-                o.getInt("temp"), o.getInt("high"), o.getInt("low"), o.getInt("code"),
-                o.getBoolean("isDay"), o.optString("place").ifBlank { null }, o.getLong("fetchedAt"),
-            )
-        } catch (_: Exception) {
-            null
+        fun fromJson(s: String?): WeatherInfo? {
+            if (s.isNullOrBlank()) return null
+            return try {
+                val o = JSONObject(s)
+                WeatherInfo(
+                    o.getInt("temp"), o.getInt("high"), o.getInt("low"), o.getInt("code"),
+                    o.getBoolean("isDay"), o.optString("place").ifBlank { null }, o.getLong("fetchedAt"),
+                )
+            } catch (_: Exception) {
+                null
+            }
         }
     }
 }
@@ -110,12 +113,12 @@ object Weather {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val provider = providers.firstOrNull { runCatching { lm.isProviderEnabled(it) }.getOrDefault(false) }
             if (provider != null) {
-                val fresh = withTimeoutOrNull(10_000) {
-                    suspendCancellableCoroutine { cont ->
+                val fresh: Location? = withTimeoutOrNull(10_000L) {
+                    suspendCancellableCoroutine<Location?> { cont ->
                         val signal = android.os.CancellationSignal()
                         cont.invokeOnCancellation { signal.cancel() }
                         try {
-                            lm.getCurrentLocation(provider, signal, context.mainExecutor) { loc -> cont.resume(loc) }
+                            lm.getCurrentLocation(provider, signal, context.mainExecutor) { loc: Location? -> cont.resume(loc) }
                         } catch (_: Exception) {
                             cont.resume(null)
                         }
