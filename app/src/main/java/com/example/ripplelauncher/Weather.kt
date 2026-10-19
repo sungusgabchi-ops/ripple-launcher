@@ -27,8 +27,8 @@ data class WeatherInfo(
     val place: String?,
     val fetchedAt: Long,
 ) {
-    val summary: String get() = describe(code)
-    val symbol: String get() = symbolFor(code, isDay)
+    val summary: String get() = Weather.describe(code)
+    val symbol: String get() = Weather.symbolFor(code, isDay)
 
     fun toJson(): String = JSONObject()
         .put("temp", temp).put("high", high).put("low", low).put("code", code)
@@ -140,7 +140,7 @@ object Weather {
         null
     }
 
-    private fun describe(code: Int): String = when (code) {
+    internal fun describe(code: Int): String = when (code) {
         0 -> "Clear"
         1 -> "Mostly clear"
         2 -> "Partly cloudy"
@@ -159,7 +159,7 @@ object Weather {
         else -> "—"
     }
 
-    private fun symbolFor(code: Int, isDay: Boolean): String = when (code) {
+    internal fun symbolFor(code: Int, isDay: Boolean): String = when (code) {
         0, 1 -> if (isDay) "☀️" else "🌙"
         2 -> if (isDay) "⛅" else "☁️"
         3 -> "☁️"
