@@ -165,7 +165,21 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
 
     fun goHome() {
         _query.value = ""
+        _searchOpen.value = false
         _homeEvents.value++
+    }
+
+    // The search box is hidden behind a search icon until tapped.
+    private val _searchOpen = MutableStateFlow(false)
+    val searchOpen: StateFlow<Boolean> = _searchOpen.asStateFlow()
+
+    fun openSearch() {
+        _searchOpen.value = true
+    }
+
+    fun closeSearch() {
+        _query.value = ""
+        _searchOpen.value = false
     }
 
     fun setQuery(q: String) {

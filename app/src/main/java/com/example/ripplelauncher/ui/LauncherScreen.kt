@@ -23,6 +23,9 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.SolidColor
 import com.example.ripplelauncher.Backdrop
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.runtime.mutableFloatStateOf
@@ -179,7 +182,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
     }
 
     val scrolledDown by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 } }
-    BackHandler(enabled = scrolledDown || query.isNotEmpty()) { vm.goHome() }
+    val searchOpen by vm.searchOpen.collectAsStateWithLifecycle()
+    BackHandler(enabled = scrolledDown || query.isNotEmpty() || searchOpen) { vm.goHome() }
 
     // Pull down at the very top (past the clock) to open notifications.
     val pullDown = remember {
@@ -262,17 +266,27 @@ fun LauncherScreen(vm: LauncherViewModel) {
 
 @Composable
 private fun Header(query: String, vm: LauncherViewModel, onGo: () -> Unit) {
-    // Top row: camera, theme and settings. Then weather, then time and date.
-    Column(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 20.dp)) {
-        Row(Modifier.fillMaxWidth().padding(start = 12.dp), horizontalArrangement = Arrangement.Start) {
-            TopActions(vm)
-        }
-        WeatherLine(vm, Modifier.padding(start = 24.dp, top = 6.dp))
+    // Weather, time and date at the top; brightness; then a row of icons
+    // (search, camera, theme, settings). Tapping search swaps the row for the search box.
+    val searchOpen by vm.searchOpen.collectAsStateWithLifecycle()
+    Column(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 16.dp)) {
+        WeatherLine(vm, Modifier.padding(start = 24.dp))
         Clock(Modifier.padding(start = 24.dp, top = 2.dp), onClick = vm::openClockApp)
         Spacer(Modifier.height(28.dp))
         BrightnessBar(vm)
-        Spacer(Modifier.height(24.dp))
-        SearchBar(query, vm, onGo)
+        Spacer(Modifier.height(20.dp))
+        Box(Modifier.fillMaxWidth().height(52.dp), contentAlignment = Alignment.CenterStart) {
+            if (searchOpen || query.isNotEmpty()) {
+                SearchBar(query, vm, onGo)
+            } else {
+                Row(Modifier.padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { vm.openSearch() }) {
+                        Icon(Icons.Rounded.Search, contentDescription = "Search", tint = Color.White.copy(alpha = 0.85f))
+                    }
+                    TopActions(vm)
+                }
+            }
+        }
     }
 }
 
@@ -444,6 +458,12 @@ private fun TopActions(vm: LauncherViewModel) {
 @Composable
 private fun SearchBar(query: String, vm: LauncherViewModel, onGo: () -> Unit) {
     val shape = RoundedCornerShape(28.dp)
+    val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+        keyboard?.show()
+    }
     BasicTextField(
         value = query,
         onValueChange = vm::setQuery,
@@ -461,7 +481,8 @@ private fun SearchBar(query: String, vm: LauncherViewModel, onGo: () -> Unit) {
                 shape,
             )
             .border(1.dp, Color.White.copy(alpha = 0.10f), shape)
-            .height(52.dp),
+            .height(52.dp)
+            .focusRequester(focusRequester),
         decorationBox = { field ->
             Row(
                 Modifier.fillMaxSize().padding(horizontal = 16.dp),
@@ -475,10 +496,8 @@ private fun SearchBar(query: String, vm: LauncherViewModel, onGo: () -> Unit) {
                     }
                     field()
                 }
-                if (query.isNotEmpty()) {
-                    IconButton(onClick = { vm.setQuery("") }, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Rounded.Close, contentDescription = "Clear", tint = Color.White.copy(alpha = 0.7f))
-                    }
+                IconButton(onClick = { vm.closeSearch() }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Rounded.Close, contentDescription = "Close search", tint = Color.White.copy(alpha = 0.7f))
                 }
             }
         },
