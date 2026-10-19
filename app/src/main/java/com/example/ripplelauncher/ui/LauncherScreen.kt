@@ -268,7 +268,7 @@ private fun Header(query: String, vm: LauncherViewModel, onGo: () -> Unit) {
             TopActions(vm)
         }
         WeatherLine(vm, Modifier.padding(start = 24.dp, top = 6.dp))
-        Clock(Modifier.padding(start = 24.dp, top = 2.dp))
+        Clock(Modifier.padding(start = 24.dp, top = 2.dp), onClick = vm::openClockApp)
         Spacer(Modifier.height(28.dp))
         BrightnessBar(vm)
         Spacer(Modifier.height(24.dp))
@@ -276,7 +276,8 @@ private fun Header(query: String, vm: LauncherViewModel, onGo: () -> Unit) {
     }
 }
 
-/** e.g. "☁️ 52° Cloudy · H 60° L 45° · Chicago". Tap to refresh. */
+/** e.g. "☁️ 52° Cloudy · H 60° L 45° · Chicago". Tap opens the weather app. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun WeatherLine(vm: LauncherViewModel, modifier: Modifier = Modifier) {
     val weather by vm.weather.collectAsStateWithLifecycle()
@@ -294,13 +295,22 @@ private fun WeatherLine(vm: LauncherViewModel, modifier: Modifier = Modifier) {
     }
 
     val style = MaterialTheme.typography.bodyMedium.copy(shadow = TextShadow)
-    val tap = Modifier.clickable(
+    // Tap: open the weather app. Long-press: refresh now.
+    val haptic = LocalHapticFeedback.current
+    val tap = Modifier.combinedClickable(
         interactionSource = remember { MutableInteractionSource() },
         indication = null,
-    ) {
-        if (granted) vm.refreshWeather(force = true)
-        else askLocation.launch(android.Manifest.permission.ACCESS_COARSE_LOCATION)
-    }
+        onClick = {
+            if (granted) vm.openWeatherApp()
+            else askLocation.launch(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+        },
+        onLongClick = {
+            if (granted) {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                vm.refreshWeather(force = true)
+            }
+        },
+    )
 
     val w = weather
     when {
@@ -476,7 +486,7 @@ private fun SearchBar(query: String, vm: LauncherViewModel, onGo: () -> Unit) {
 }
 
 @Composable
-private fun Clock(modifier: Modifier = Modifier) {
+private fun Clock(modifier: Modifier = Modifier, onClick: () -> Unit) {
     val context = LocalContext.current
     // Ticks exactly on each minute boundary.
     val now by produceState(Date()) {
@@ -494,12 +504,8 @@ private fun Clock(modifier: Modifier = Modifier) {
         modifier.clickable(
             interactionSource = remember { MutableInteractionSource() },
             indication = null,
-        ) {
-            try {
-                context.startActivity(Intent(AlarmClock.ACTION_SHOW_ALARMS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            } catch (_: Exception) {
-            }
-        },
+            onClick = onClick,
+        ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(

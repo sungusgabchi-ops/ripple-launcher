@@ -288,6 +288,67 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
 
     // --- App actions ------------------------------------------------------
 
+    // --- Weather and clock shortcuts --------------------------------------
+
+    private fun launchPackage(pkg: String): Boolean {
+        val app = _apps.value.firstOrNull { it.component.packageName == pkg } ?: return false
+        launch(app)
+        return true
+    }
+
+    private fun startQuietly(intent: Intent): Boolean = try {
+        getApplication<Application>().startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        true
+    } catch (_: Exception) {
+        false
+    }
+
+    /** Opens the phone's clock app on its main screen. */
+    fun openClockApp() {
+        val pm = getApplication<Application>().packageManager
+        // Whichever app handles alarms is the clock app.
+        val handler = runCatching {
+            pm.resolveActivity(Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS), 0)?.activityInfo?.packageName
+        }.getOrNull()
+        val known = listOf(
+            "com.google.android.deskclock", "com.sec.android.app.clockpackage", "com.android.deskclock",
+            "com.oneplus.deskclock", "com.coloros.alarmclock", "com.oplus.alarmclock",
+            "com.motorola.timeweatherwidget", "com.huawei.deskclock", "com.miui.clock", "com.lge.clock",
+        )
+        for (pkg in listOfNotNull(handler) + known) if (launchPackage(pkg)) return
+        _apps.value.firstOrNull { it.label.equals("Clock", ignoreCase = true) }?.let { launch(it); return }
+        if (!startQuietly(Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS))) toast("No clock app found")
+    }
+
+    /** Opens a weather app: an installed one if possible, otherwise Google's weather page. */
+    fun openWeatherApp() {
+        val known = listOf(
+            "com.sec.android.daemonapp",              // Samsung Weather
+            "com.google.android.apps.weather",        // Google Weather
+            "com.motorola.timeweatherwidget",
+            "com.oneplus.weather", "com.coloros.weather2", "com.oplus.weather", "com.miui.weather2",
+            "com.huawei.android.totemweather",
+            "com.weather.Weather",                    // The Weather Channel
+            "com.accuweather.android",
+            "com.yahoo.mobile.client.android.weather",
+            "com.wunderground.android.weather",
+            "com.handmark.expressweather",
+            "com.windyty.android",
+        )
+        for (pkg in known) if (launchPackage(pkg)) return
+        _apps.value.firstOrNull { it.label.contains("weather", ignoreCase = true) }?.let { launch(it); return }
+
+        // Pixel phones: Google's weather screen lives inside the Google app.
+        val pixelWeather = Intent().setClassName(
+            "com.google.android.googlequicksearchbox",
+            "com.google.android.apps.search.weather.WeatherExportedActivity",
+        )
+        if (startQuietly(pixelWeather)) return
+        if (!startQuietly(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=weather")))) {
+            toast("No weather app found")
+        }
+    }
+
     fun launch(app: AppEntry) {
         try {
             launcherApps.startMainActivity(app.component, app.user, null, null)
