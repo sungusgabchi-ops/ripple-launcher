@@ -4,6 +4,8 @@ import android.content.Intent
 import android.provider.AlarmClock
 import android.text.format.DateFormat
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -260,16 +262,76 @@ fun LauncherScreen(vm: LauncherViewModel) {
 
 @Composable
 private fun Header(query: String, vm: LauncherViewModel, onGo: () -> Unit) {
-    // Top row: camera, theme and settings. Next line: time and date.
+    // Top row: camera, theme and settings. Then weather, then time and date.
     Column(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 20.dp)) {
         Row(Modifier.fillMaxWidth().padding(start = 12.dp), horizontalArrangement = Arrangement.Start) {
             TopActions(vm)
         }
-        Clock(Modifier.padding(start = 24.dp, top = 8.dp))
+        WeatherLine(vm, Modifier.padding(start = 24.dp, top = 6.dp))
+        Clock(Modifier.padding(start = 24.dp, top = 2.dp))
         Spacer(Modifier.height(28.dp))
         BrightnessBar(vm)
         Spacer(Modifier.height(24.dp))
         SearchBar(query, vm, onGo)
+    }
+}
+
+/** e.g. "☁️ 52° Cloudy · H 60° L 45° · Chicago". Tap to refresh. */
+@Composable
+private fun WeatherLine(vm: LauncherViewModel, modifier: Modifier = Modifier) {
+    val weather by vm.weather.collectAsStateWithLifecycle()
+    var granted by remember { mutableStateOf(vm.hasLocationPermission()) }
+    val askLocation = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        granted = ok
+        if (ok) vm.refreshWeather(force = true)
+    }
+
+    // Refresh whenever the home screen comes back into view (at most every 30 minutes).
+    LifecycleResumeEffect(Unit) {
+        granted = vm.hasLocationPermission()
+        vm.refreshWeather()
+        onPauseOrDispose { }
+    }
+
+    val style = MaterialTheme.typography.bodyMedium.copy(shadow = TextShadow)
+    val tap = Modifier.clickable(
+        interactionSource = remember { MutableInteractionSource() },
+        indication = null,
+    ) {
+        if (granted) vm.refreshWeather(force = true)
+        else askLocation.launch(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+    }
+
+    val w = weather
+    when {
+        !granted -> Text(
+            "Tap to show weather",
+            color = Color.White.copy(alpha = 0.6f),
+            fontSize = 15.sp,
+            style = style,
+            modifier = modifier.then(tap),
+        )
+        w == null -> Text(
+            "Loading weather…",
+            color = Color.White.copy(alpha = 0.6f),
+            fontSize = 15.sp,
+            style = style,
+            modifier = modifier.then(tap),
+        )
+        else -> Row(modifier.then(tap), verticalAlignment = Alignment.CenterVertically) {
+            Text("${w.symbol}  ${w.temp}°", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium, style = style)
+            Text(
+                buildString {
+                    append("  ${w.summary}  ·  H ${w.high}°  L ${w.low}°")
+                    w.place?.let { append("  ·  $it") }
+                },
+                color = Color.White.copy(alpha = 0.7f),
+                fontSize = 15.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = style,
+            )
+        }
     }
 }
 

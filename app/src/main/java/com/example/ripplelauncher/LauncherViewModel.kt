@@ -179,6 +179,35 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
     )
     val backdrop: StateFlow<Backdrop> = _backdrop.asStateFlow()
 
+    // --- Weather ----------------------------------------------------------
+
+    private val _weather = MutableStateFlow(WeatherInfo.fromJson(prefs.getString(KEY_WEATHER, null)))
+    val weather: StateFlow<WeatherInfo?> = _weather.asStateFlow()
+    private var weatherLoading = false
+
+    fun hasLocationPermission(): Boolean =
+        androidx.core.content.ContextCompat.checkSelfPermission(
+            getApplication(), android.Manifest.permission.ACCESS_COARSE_LOCATION,
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    /** Refreshes when the cached weather is over 30 minutes old (or always, if forced). */
+    fun refreshWeather(force: Boolean = false) {
+        if (weatherLoading || !hasLocationPermission()) return
+        val age = System.currentTimeMillis() - (_weather.value?.fetchedAt ?: 0L)
+        if (!force && age < 30 * 60 * 1000L) return
+        weatherLoading = true
+        viewModelScope.launch {
+            try {
+                Weather.fetch(getApplication())?.let {
+                    _weather.value = it
+                    prefs.edit().putString(KEY_WEATHER, it.toJson()).apply()
+                } ?: run { if (force) toast("Couldn't update the weather") }
+            } finally {
+                weatherLoading = false
+            }
+        }
+    }
+
     fun setBackdrop(b: Backdrop) {
         _backdrop.value = b
         prefs.edit().putString(KEY_BACKDROP, b.name).apply()
@@ -341,6 +370,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
     private companion object {
         const val KEY_FAVORITES = "favorites"
         const val KEY_BACKDROP = "backdrop"
+        const val KEY_WEATHER = "weather"
 
         // In the companion so it's ready before init{} reads the saved list.
         val appOrder = compareBy<AppEntry> { if (it.letter == '#') 0 else 1 }
