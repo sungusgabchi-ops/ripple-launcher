@@ -154,6 +154,7 @@ private sealed interface Item {
 
     data object Hint : Item { override val key = "hint" }
     data object Gap : Item { override val key = "gap" }
+    data object SectionGap : Item { override val key = "section_gap" }
     /** The favorites grid. Rows alternate 5 / 4 / 5 icons. */
     data class Favorites(val apps: List<AppEntry>) : Item {
         override val key = "favorites"
@@ -164,6 +165,10 @@ private sealed interface Item {
     /** Tap to expand or collapse the less-used apps below it. */
     data class LessUsedHeader(val count: Int, val expanded: Boolean) : Item {
         override val key = "less_used_header"
+    }
+    /** Tap to expand or collapse the Secondary group, between favorites and A. */
+    data class SecondaryHeader(val count: Int, val expanded: Boolean) : Item {
+        override val key = "secondary_header"
     }
 }
 
@@ -184,8 +189,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
     // letterIndex maps each scroller letter to the list position it jumps to.
     val lessUsedKeys by vm.lessUsedKeys.collectAsStateWithLifecycle()
     var lessUsedExpanded by rememberSaveable { mutableStateOf(false) }
+    val secondaryKeys by vm.secondaryKeys.collectAsStateWithLifecycle()
+    var secondaryExpanded by rememberSaveable { mutableStateOf(false) }
 
-    val (items, letterIndex) = remember(apps, favorites, favoriteSet, query, lessUsedKeys, lessUsedExpanded) {
+    val (items, letterIndex) = remember(
+        apps, favorites, favoriteSet, query, lessUsedKeys, lessUsedExpanded, secondaryKeys, secondaryExpanded,
+    ) {
         val list = mutableListOf<Item>()
         val index = mutableMapOf(FAVORITES_MARK to 0)
         if (query.isBlank()) {
@@ -193,10 +202,19 @@ fun LauncherScreen(vm: LauncherViewModel) {
             else list += Item.Favorites(favorites)
             list += Item.Gap
             var last: Char? = null
-            // Favorites only appear in the favorites grid, not again in the list.
-            val (lessUsed, main) = apps
-                .filter { it.key !in favoriteSet }
+            // Each app shows in one place only: favorites, then Secondary, then A–Z, then Hidden.
+            val notFavorite = apps.filter { it.key !in favoriteSet }
+            val secondary = notFavorite.filter { it.key in secondaryKeys }
+            val (lessUsed, main) = notFavorite
+                .filter { it.key !in secondaryKeys }
                 .partition { it.key in lessUsedKeys }
+
+            // Between favorites and A: the collapsible Secondary group.
+            if (secondary.isNotEmpty()) {
+                list += Item.SecondaryHeader(secondary.size, secondaryExpanded)
+                if (secondaryExpanded) secondary.forEach { list += Item.App(it, null) }
+                list += Item.SectionGap
+            }
             for (app in main) {
                 val first = app.letter != last
                 if (first) index[app.letter] = list.size
@@ -218,8 +236,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
         }
         list.toList() to index.toMap()
     }
-    val letters = remember(apps, favoriteSet, lessUsedKeys) {
-        val (lessUsed, main) = apps.filter { it.key !in favoriteSet }.partition { it.key in lessUsedKeys }
+    val letters = remember(apps, favoriteSet, lessUsedKeys, secondaryKeys) {
+        val (lessUsed, main) = apps
+            .filter { it.key !in favoriteSet && it.key !in secondaryKeys }
+            .partition { it.key in lessUsedKeys }
         listOf(FAVORITES_MARK) + main.map { it.letter }.distinct() + if (lessUsed.isNotEmpty()) listOf(LESS_USED_MARK) else emptyList()
     }
 
@@ -313,6 +333,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             .padding(start = Ui.Gutter, end = 4.dp, top = 4.dp, bottom = 4.dp),
                     )
                     Item.Gap -> Spacer(Modifier.height(16.dp))
+                    Item.SectionGap -> Spacer(Modifier.height(10.dp))
                     is Item.Favorites -> FavoriteGrid(item.apps, vm)
                     is Item.App -> Box(if (item.lessUsed) Modifier.alpha(0.75f) else Modifier) {
                         AppRow(
@@ -323,7 +344,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             big = false,
                         )
                     }
-                    is Item.LessUsedHeader -> LessUsedHeader(item) { lessUsedExpanded = !lessUsedExpanded }
+                    is Item.LessUsedHeader -> SectionHeader("HIDDEN", item.count, item.expanded, divider = true) {
+                        lessUsedExpanded = !lessUsedExpanded
+                    }
+                    is Item.SecondaryHeader -> SectionHeader("SECONDARY", item.count, item.expanded, divider = false) {
+                        secondaryExpanded = !secondaryExpanded
+                    }
                 }
                 }
             }
@@ -883,10 +909,10 @@ private fun AppRow(
 // --- "Less used" section header, after Z ----------------------------------------
 
 @Composable
-private fun LessUsedHeader(item: Item.LessUsedHeader, onToggle: () -> Unit) {
-    val turn by animateFloatAsState(if (item.expanded) 180f else 0f, tween(220), label = "chevron")
-    Column(Modifier.fillMaxWidth().padding(top = 24.dp)) {
-        Box(
+private fun SectionHeader(title: String, count: Int, expanded: Boolean, divider: Boolean, onToggle: () -> Unit) {
+    val turn by animateFloatAsState(if (expanded) 180f else 0f, tween(220), label = "chevron")
+    Column(Modifier.fillMaxWidth().padding(top = if (divider) 24.dp else 0.dp)) {
+        if (divider) Box(
             Modifier
                 .fillMaxWidth()
                 .padding(horizontal = Ui.Gutter)
@@ -904,13 +930,13 @@ private fun LessUsedHeader(item: Item.LessUsedHeader, onToggle: () -> Unit) {
                 .padding(start = Ui.Gutter, end = 12.dp, top = 14.dp, bottom = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("HIDDEN", style = Type.Label, color = Accent)
+            Text(title, style = Type.Label, color = Accent)
             Spacer(Modifier.width(10.dp))
-            Text("${item.count}", style = Type.Label, color = Ui.InkFaint)
+            Text("$count", style = Type.Label, color = Ui.InkFaint)
             Spacer(Modifier.weight(1f))
             Icon(
                 painterResource(R.drawable.ic_chevron_down),
-                contentDescription = if (item.expanded) "Collapse" else "Expand",
+                contentDescription = if (expanded) "Collapse" else "Expand",
                 tint = Ui.InkMuted,
                 modifier = Modifier.size(22.dp).graphicsLayer { rotationZ = turn },
             )
@@ -937,6 +963,11 @@ private fun AppMenu(
         RippleMenuItem(if (isFavorite) "Remove from favorites" else "Add to favorites", { onDismiss(); vm.toggleFavorite(app) })
         if (canMoveUp) RippleMenuItem(moveUpLabel, { onDismiss(); vm.moveFavorite(app, -1) })
         if (canMoveDown) RippleMenuItem(moveDownLabel, { onDismiss(); vm.moveFavorite(app, 1) })
+        val secondary by vm.secondaryKeys.collectAsStateWithLifecycle()
+        if (!isFavorite) RippleMenuItem(
+            if (app.key in secondary) "Remove from Secondary" else "Add to Secondary",
+            { onDismiss(); vm.toggleSecondary(app) },
+        )
         val lessUsed by vm.lessUsedKeys.collectAsStateWithLifecycle()
         RippleMenuItem(
             if (app.key in lessUsed) "Unhide" else "Hide",

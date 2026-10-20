@@ -419,6 +419,22 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         val next = if (app.key in current) current - app.key else current + app.key
         _lessUsedKeys.value = next
         prefs.edit().putStringSet(KEY_LESS_USED, next).apply()
+        // An app lives in one section at a time.
+        if (app.key in next && app.key in _secondaryKeys.value) toggleSecondary(app)
+    }
+
+    // --- Secondary ----------------------------------------------------------
+    // A collapsible group between the favorites and the A–Z list.
+
+    private val _secondaryKeys = MutableStateFlow(prefs.getStringSet(KEY_SECONDARY, emptySet())!!.toSet())
+    val secondaryKeys: StateFlow<Set<String>> = _secondaryKeys.asStateFlow()
+
+    fun toggleSecondary(app: AppEntry) {
+        val current = _secondaryKeys.value
+        val next = if (app.key in current) current - app.key else current + app.key
+        _secondaryKeys.value = next
+        prefs.edit().putStringSet(KEY_SECONDARY, next).apply()
+        if (app.key in next && app.key in _lessUsedKeys.value) toggleLessUsed(app)
     }
 
     fun toggleFavorite(app: AppEntry) {
@@ -460,6 +476,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         const val KEY_BACKDROP = "backdrop"
         const val KEY_WEATHER = "weather"
         const val KEY_LESS_USED = "less_used"
+        const val KEY_SECONDARY = "secondary"
 
         // In the companion so it's ready before init{} reads the saved list.
         val appOrder = compareBy<AppEntry> { if (it.letter == '#') 0 else 1 }
