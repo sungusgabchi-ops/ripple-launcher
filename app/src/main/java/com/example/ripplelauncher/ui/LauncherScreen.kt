@@ -185,7 +185,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val lessUsedKeys by vm.lessUsedKeys.collectAsStateWithLifecycle()
     var lessUsedExpanded by rememberSaveable { mutableStateOf(false) }
 
-    val (items, letterIndex) = remember(apps, favorites, query, lessUsedKeys, lessUsedExpanded) {
+    val (items, letterIndex) = remember(apps, favorites, favoriteSet, query, lessUsedKeys, lessUsedExpanded) {
         val list = mutableListOf<Item>()
         val index = mutableMapOf(FAVORITES_MARK to 0)
         if (query.isBlank()) {
@@ -193,7 +193,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
             else list += Item.Favorites(favorites)
             list += Item.Gap
             var last: Char? = null
-            val (lessUsed, main) = apps.partition { it.key in lessUsedKeys }
+            // Favorites only appear in the favorites grid, not again in the list.
+            val (lessUsed, main) = apps
+                .filter { it.key !in favoriteSet }
+                .partition { it.key in lessUsedKeys }
             for (app in main) {
                 val first = app.letter != last
                 if (first) index[app.letter] = list.size
@@ -215,8 +218,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
         }
         list.toList() to index.toMap()
     }
-    val letters = remember(apps, lessUsedKeys) {
-        val (lessUsed, main) = apps.partition { it.key in lessUsedKeys }
+    val letters = remember(apps, favoriteSet, lessUsedKeys) {
+        val (lessUsed, main) = apps.filter { it.key !in favoriteSet }.partition { it.key in lessUsedKeys }
         listOf(FAVORITES_MARK) + main.map { it.letter }.distinct() + if (lessUsed.isNotEmpty()) listOf(LESS_USED_MARK) else emptyList()
     }
 
@@ -901,7 +904,7 @@ private fun LessUsedHeader(item: Item.LessUsedHeader, onToggle: () -> Unit) {
                 .padding(start = Ui.Gutter, end = 12.dp, top = 14.dp, bottom = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("LESS USED", style = Type.Label, color = Accent)
+            Text("HIDDEN", style = Type.Label, color = Accent)
             Spacer(Modifier.width(10.dp))
             Text("${item.count}", style = Type.Label, color = Ui.InkFaint)
             Spacer(Modifier.weight(1f))
@@ -936,7 +939,7 @@ private fun AppMenu(
         if (canMoveDown) RippleMenuItem(moveDownLabel, { onDismiss(); vm.moveFavorite(app, 1) })
         val lessUsed by vm.lessUsedKeys.collectAsStateWithLifecycle()
         RippleMenuItem(
-            if (app.key in lessUsed) "Move back to A–Z list" else "Move to Less used",
+            if (app.key in lessUsed) "Unhide" else "Hide",
             { onDismiss(); vm.toggleLessUsed(app) },
         )
         RippleMenuItem("App info", { onDismiss(); vm.openAppInfo(app) })
