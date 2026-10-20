@@ -309,9 +309,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         color = Ui.InkMuted,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(start = Ui.Gutter, end = 4.dp)
-                            .panel(RoundedCornerShape(20.dp))
-                            .padding(horizontal = 16.dp, vertical = 16.dp),
+                            .padding(start = Ui.Gutter, end = 4.dp, top = 4.dp, bottom = 4.dp),
                     )
                     Item.Gap -> Spacer(Modifier.height(16.dp))
                     is Item.Favorites -> FavoriteGrid(item.apps, vm)
@@ -661,13 +659,11 @@ private fun FavoriteGrid(favorites: List<AppEntry>, vm: LauncherViewModel) {
 
     var pressedKey by remember { mutableStateOf<String?>(null) }
 
-    // A quiet panel gives the favorites a home, separate from the A–Z list.
+    // No container: the icons sit straight on the wallpaper, between the gutters.
     Box(
         Modifier
             .fillMaxWidth()
-            .padding(start = Ui.Gutter, end = 4.dp)
-            .panel(RoundedCornerShape(26.dp))
-            .padding(horizontal = 6.dp, vertical = 8.dp)
+            .padding(start = Ui.Gutter - 6.dp, end = 0.dp)
     ) {
     BoxWithConstraints(
         Modifier
