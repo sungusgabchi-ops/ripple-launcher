@@ -41,6 +41,17 @@ enum class Backdrop(val label: String) {
     Black("Black"),
 }
 
+/** A named, collapsible group of apps between the favorites and A. */
+data class Section(val id: String, val name: String)
+
+/** Where an app can live. */
+sealed interface Destination {
+    data object Favorites : Destination
+    data class InSection(val id: String) : Destination
+    data object List : Destination
+    data object Hidden : Destination
+}
+
 data class AppEntry(
     val key: String,
     val label: String,
@@ -408,38 +419,126 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
 
     // --- Favorites --------------------------------------------------------
 
-    // --- Less used ----------------------------------------------------------
-    // Apps moved out of the A–Z list into a collapsible section at the end.
+    // --- Where each app lives ------------------------------------------------
+    // Every app has exactly one home: Favorites, a named section, the A–Z list, or Hidden.
 
+    // Hidden: the collapsible group after Z.
     private val _lessUsedKeys = MutableStateFlow(prefs.getStringSet(KEY_LESS_USED, emptySet())!!.toSet())
     val lessUsedKeys: StateFlow<Set<String>> = _lessUsedKeys.asStateFlow()
 
-    fun toggleLessUsed(app: AppEntry) {
-        val current = _lessUsedKeys.value
-        val next = if (app.key in current) current - app.key else current + app.key
-        _lessUsedKeys.value = next
-        prefs.edit().putStringSet(KEY_LESS_USED, next).apply()
-        // An app lives in one section at a time.
-        if (app.key in next && app.key in _secondaryKeys.value) toggleSecondary(app)
+    // Named sections between the favorites and A, in display order.
+    private val _sections = MutableStateFlow(loadSections())
+    val sections: StateFlow<List<Section>> = _sections.asStateFlow()
+
+    // app key -> section id
+    private val _sectionOf = MutableStateFlow(loadSectionApps())
+    val sectionOf: StateFlow<Map<String, String>> = _sectionOf.asStateFlow()
+
+    fun destinationOf(app: AppEntry): Destination = when {
+        app.key in _favoriteKeys.value -> Destination.Favorites
+        _sectionOf.value[app.key]?.let { id -> _sections.value.any { it.id == id } } == true ->
+            Destination.InSection(_sectionOf.value.getValue(app.key))
+        app.key in _lessUsedKeys.value -> Destination.Hidden
+        else -> Destination.List
     }
 
-    // --- Secondary ----------------------------------------------------------
-    // A collapsible group between the favorites and the A–Z list.
-
-    private val _secondaryKeys = MutableStateFlow(prefs.getStringSet(KEY_SECONDARY, emptySet())!!.toSet())
-    val secondaryKeys: StateFlow<Set<String>> = _secondaryKeys.asStateFlow()
-
-    fun toggleSecondary(app: AppEntry) {
-        val current = _secondaryKeys.value
-        val next = if (app.key in current) current - app.key else current + app.key
-        _secondaryKeys.value = next
-        prefs.edit().putStringSet(KEY_SECONDARY, next).apply()
-        if (app.key in next && app.key in _lessUsedKeys.value) toggleLessUsed(app)
+    /** Moves an app to a new home, taking it out of wherever it was. */
+    fun moveApp(app: AppEntry, to: Destination) {
+        val key = app.key
+        if (to != Destination.Favorites && key in _favoriteKeys.value) saveFavorites(_favoriteKeys.value - key)
+        if (to !is Destination.InSection && key in _sectionOf.value) saveSectionApps(_sectionOf.value - key)
+        if (to != Destination.Hidden && key in _lessUsedKeys.value) saveHidden(_lessUsedKeys.value - key)
+        when (to) {
+            Destination.Favorites -> if (key !in _favoriteKeys.value) saveFavorites(_favoriteKeys.value + key)
+            is Destination.InSection -> saveSectionApps(_sectionOf.value + (key to to.id))
+            Destination.Hidden -> saveHidden(_lessUsedKeys.value + key)
+            Destination.List -> Unit
+        }
     }
 
-    fun toggleFavorite(app: AppEntry) {
-        val current = _favoriteKeys.value
-        saveFavorites(if (app.key in current) current - app.key else current + app.key)
+    /** "Hide" / "Unhide" in the long-press menu. */
+    fun toggleLessUsed(app: AppEntry) =
+        moveApp(app, if (destinationOf(app) == Destination.Hidden) Destination.List else Destination.Hidden)
+
+    fun toggleFavorite(app: AppEntry) =
+        moveApp(app, if (destinationOf(app) == Destination.Favorites) Destination.List else Destination.Favorites)
+
+    // --- Sections -----------------------------------------------------------
+
+    fun createSection(name: String) {
+        val clean = name.trim().ifEmpty { return }
+        val id = "s" + System.currentTimeMillis().toString(36)
+        saveSections(_sections.value + Section(id, clean))
+    }
+
+    fun renameSection(id: String, name: String) {
+        val clean = name.trim().ifEmpty { return }
+        saveSections(_sections.value.map { if (it.id == id) it.copy(name = clean) else it })
+    }
+
+    /** Deletes a section. Its apps go back to the A–Z list. */
+    fun deleteSection(id: String) {
+        saveSections(_sections.value.filterNot { it.id == id })
+        saveSectionApps(_sectionOf.value.filterValues { it != id })
+    }
+
+    fun moveSection(id: String, direction: Int) {
+        val list = _sections.value.toMutableList()
+        val from = list.indexOfFirst { it.id == id }
+        val to = from + direction
+        if (from == -1 || to !in list.indices) return
+        list.add(to, list.removeAt(from))
+        saveSections(list)
+    }
+
+    private fun loadSections(): List<Section> {
+        val raw = prefs.getString(KEY_SECTIONS, null)
+        if (raw == null) {
+            // First run with sections: keep the "Secondary" group from before as a normal section.
+            val start = listOf(Section(SECONDARY_ID, "Secondary"))
+            prefs.edit().putString(KEY_SECTIONS, sectionsToJson(start)).apply()
+            return start
+        }
+        return try {
+            val arr = org.json.JSONArray(raw)
+            List(arr.length()) { i -> arr.getJSONObject(i).let { Section(it.getString("id"), it.getString("name")) } }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun loadSectionApps(): Map<String, String> {
+        val raw = prefs.getString(KEY_SECTION_APPS, null)
+        if (raw == null) {
+            // Carry over apps that were in the old Secondary group.
+            val old = prefs.getStringSet(KEY_SECONDARY, emptySet())!!.associateWith { SECONDARY_ID }
+            prefs.edit().putString(KEY_SECTION_APPS, org.json.JSONObject(old).toString()).apply()
+            return old
+        }
+        return try {
+            val o = org.json.JSONObject(raw)
+            o.keys().asSequence().associateWith { o.getString(it) }
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    private fun sectionsToJson(list: List<Section>): String =
+        org.json.JSONArray(list.map { org.json.JSONObject().put("id", it.id).put("name", it.name) }).toString()
+
+    private fun saveSections(list: List<Section>) {
+        _sections.value = list
+        prefs.edit().putString(KEY_SECTIONS, sectionsToJson(list)).apply()
+    }
+
+    private fun saveSectionApps(map: Map<String, String>) {
+        _sectionOf.value = map
+        prefs.edit().putString(KEY_SECTION_APPS, org.json.JSONObject(map).toString()).apply()
+    }
+
+    private fun saveHidden(set: Set<String>) {
+        _lessUsedKeys.value = set
+        prefs.edit().putStringSet(KEY_LESS_USED, set).apply()
     }
 
     fun moveFavorite(app: AppEntry, direction: Int) {
@@ -476,7 +575,10 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         const val KEY_BACKDROP = "backdrop"
         const val KEY_WEATHER = "weather"
         const val KEY_LESS_USED = "less_used"
-        const val KEY_SECONDARY = "secondary"
+        const val KEY_SECONDARY = "secondary"   // old, read once for migration
+        const val KEY_SECTIONS = "sections"
+        const val KEY_SECTION_APPS = "section_apps"
+        const val SECONDARY_ID = "secondary"
 
         // In the companion so it's ready before init{} reads the saved list.
         val appOrder = compareBy<AppEntry> { if (it.letter == '#') 0 else 1 }

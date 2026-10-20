@@ -23,6 +23,9 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.SolidColor
 import com.example.ripplelauncher.Backdrop
+import androidx.compose.ui.window.Dialog
+import com.example.ripplelauncher.Destination
+import com.example.ripplelauncher.Section
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.haze
@@ -166,9 +169,15 @@ private sealed interface Item {
     data class LessUsedHeader(val count: Int, val expanded: Boolean) : Item {
         override val key = "less_used_header"
     }
-    /** Tap to expand or collapse the Secondary group, between favorites and A. */
-    data class SecondaryHeader(val count: Int, val expanded: Boolean) : Item {
-        override val key = "secondary_header"
+    /** A named section between favorites and A. Tap to expand, long-press for options. */
+    data class SectionHeader(
+        val section: Section, val count: Int, val expanded: Boolean, val first: Boolean, val last: Boolean,
+    ) : Item {
+        override val key = "section_${section.id}"
+    }
+    /** Shown inside an expanded section that has no apps yet. */
+    data class SectionEmpty(val section: Section) : Item {
+        override val key = "section_empty_${section.id}"
     }
 }
 
@@ -189,11 +198,14 @@ fun LauncherScreen(vm: LauncherViewModel) {
     // letterIndex maps each scroller letter to the list position it jumps to.
     val lessUsedKeys by vm.lessUsedKeys.collectAsStateWithLifecycle()
     var lessUsedExpanded by rememberSaveable { mutableStateOf(false) }
-    val secondaryKeys by vm.secondaryKeys.collectAsStateWithLifecycle()
-    var secondaryExpanded by rememberSaveable { mutableStateOf(false) }
+    val sections by vm.sections.collectAsStateWithLifecycle()
+    val sectionOf by vm.sectionOf.collectAsStateWithLifecycle()
+    var expandedSections by rememberSaveable { mutableStateOf(listOf<String>()) }
+    var renaming by remember { mutableStateOf<Section?>(null) }
+    var deleting by remember { mutableStateOf<Section?>(null) }
 
     val (items, letterIndex) = remember(
-        apps, favorites, favoriteSet, query, lessUsedKeys, lessUsedExpanded, secondaryKeys, secondaryExpanded,
+        apps, favorites, favoriteSet, query, lessUsedKeys, lessUsedExpanded, sections, sectionOf, expandedSections,
     ) {
         val list = mutableListOf<Item>()
         val index = mutableMapOf(FAVORITES_MARK to 0)
@@ -202,19 +214,25 @@ fun LauncherScreen(vm: LauncherViewModel) {
             else list += Item.Favorites(favorites)
             list += Item.Gap
             var last: Char? = null
-            // Each app shows in one place only: favorites, then Secondary, then A–Z, then Hidden.
+            // Each app shows in one place only: favorites, a section, A–Z, or Hidden.
             val notFavorite = apps.filter { it.key !in favoriteSet }
-            val secondary = notFavorite.filter { it.key in secondaryKeys }
+            val sectionIds = sections.map { it.id }.toSet()
+            fun sectionFor(app: AppEntry) = sectionOf[app.key]?.takeIf { it in sectionIds }
             val (lessUsed, main) = notFavorite
-                .filter { it.key !in secondaryKeys }
+                .filter { sectionFor(it) == null }
                 .partition { it.key in lessUsedKeys }
 
-            // Between favorites and A: the collapsible Secondary group.
-            if (secondary.isNotEmpty()) {
-                list += Item.SecondaryHeader(secondary.size, secondaryExpanded)
-                if (secondaryExpanded) secondary.forEach { list += Item.App(it, null) }
-                list += Item.SectionGap
+            // Between favorites and A: your sections, each collapsible.
+            sections.forEachIndexed { i, section ->
+                val members = notFavorite.filter { sectionFor(it) == section.id }
+                val open = section.id in expandedSections
+                list += Item.SectionHeader(section, members.size, open, first = i == 0, last = i == sections.lastIndex)
+                if (open) {
+                    if (members.isEmpty()) list += Item.SectionEmpty(section)
+                    else members.forEach { list += Item.App(it, null) }
+                }
             }
+            if (sections.isNotEmpty()) list += Item.SectionGap
             for (app in main) {
                 val first = app.letter != last
                 if (first) index[app.letter] = list.size
@@ -236,9 +254,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
         }
         list.toList() to index.toMap()
     }
-    val letters = remember(apps, favoriteSet, lessUsedKeys, secondaryKeys) {
+    val letters = remember(apps, favoriteSet, lessUsedKeys, sections, sectionOf) {
+        val sectionIds = sections.map { it.id }.toSet()
         val (lessUsed, main) = apps
-            .filter { it.key !in favoriteSet && it.key !in secondaryKeys }
+            .filter { it.key !in favoriteSet && sectionOf[it.key] !in sectionIds }
             .partition { it.key in lessUsedKeys }
         listOf(FAVORITES_MARK) + main.map { it.letter }.distinct() + if (lessUsed.isNotEmpty()) listOf(LESS_USED_MARK) else emptyList()
     }
@@ -347,9 +366,22 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     is Item.LessUsedHeader -> SectionHeader("HIDDEN", item.count, item.expanded, divider = true) {
                         lessUsedExpanded = !lessUsedExpanded
                     }
-                    is Item.SecondaryHeader -> SectionHeader("SECONDARY", item.count, item.expanded, divider = false) {
-                        secondaryExpanded = !secondaryExpanded
-                    }
+                    is Item.SectionHeader -> CustomSectionHeader(
+                        item = item,
+                        vm = vm,
+                        onToggle = {
+                            val id = item.section.id
+                            expandedSections = if (id in expandedSections) expandedSections - id else expandedSections + id
+                        },
+                        onRename = { renaming = item.section },
+                        onDelete = { deleting = item.section },
+                    )
+                    is Item.SectionEmpty -> Text(
+                        "Empty. Long-press any app and choose Move to… → ${item.section.name}.",
+                        style = Type.Caption,
+                        color = Ui.InkFaint,
+                        modifier = Modifier.padding(start = Ui.Gutter, end = 8.dp, top = 2.dp, bottom = 10.dp),
+                    )
                 }
                 }
             }
@@ -407,6 +439,25 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 (items.firstOrNull { it is Item.App } as? Item.App)?.let { vm.launch(it.app) }
             })
         }
+    }
+
+    renaming?.let { section ->
+        NameDialog(
+            title = "Rename section",
+            initial = section.name,
+            confirmLabel = "Save",
+            onConfirm = { vm.renameSection(section.id, it); renaming = null },
+            onDismiss = { renaming = null },
+        )
+    }
+    deleting?.let { section ->
+        ConfirmDialog(
+            title = "Delete “${section.name}”?",
+            message = "The section is removed. Its apps go back to the A–Z list.",
+            confirmLabel = "Delete",
+            onConfirm = { vm.deleteSection(section.id); deleting = null },
+            onDismiss = { deleting = null },
+        )
     }
 }
 
@@ -586,7 +637,8 @@ private fun GlassButton(icon: Int, description: String, onClick: () -> Unit) {
 private fun ActionRow(vm: LauncherViewModel) {
     val backdrop by vm.backdrop.collectAsStateWithLifecycle()
     var menuOpen by remember { mutableStateOf(false) }
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+    var creating by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
         GlassButton(R.drawable.ic_search, "Search") { vm.openSearch() }
         GlassButton(R.drawable.ic_camera, "Camera") { vm.openCamera() }
         Box {
@@ -607,6 +659,18 @@ private fun ActionRow(vm: LauncherViewModel) {
             }
         }
         GlassButton(R.drawable.ic_settings, "System settings") { vm.openSystemSettings() }
+        Spacer(Modifier.weight(1f))
+        // Far right: create a new section.
+        GlassButton(R.drawable.ic_add, "New section") { creating = true }
+    }
+    if (creating) {
+        NameDialog(
+            title = "New section",
+            initial = "",
+            confirmLabel = "Create",
+            onConfirm = { vm.createSection(it); creating = false },
+            onDismiss = { creating = false },
+        )
     }
 }
 
@@ -908,8 +972,17 @@ private fun AppRow(
 
 // --- "Less used" section header, after Z ----------------------------------------
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SectionHeader(title: String, count: Int, expanded: Boolean, divider: Boolean, onToggle: () -> Unit) {
+private fun SectionHeader(
+    title: String,
+    count: Int,
+    expanded: Boolean,
+    divider: Boolean,
+    onLongClick: (() -> Unit)? = null,
+    onToggle: () -> Unit,
+) {
+    val haptic = LocalHapticFeedback.current
     val turn by animateFloatAsState(if (expanded) 180f else 0f, tween(220), label = "chevron")
     Column(Modifier.fillMaxWidth().padding(top = if (divider) 24.dp else 0.dp)) {
         if (divider) Box(
@@ -922,10 +995,11 @@ private fun SectionHeader(title: String, count: Int, expanded: Boolean, divider:
         Row(
             Modifier
                 .fillMaxWidth()
-                .clickable(
+                .combinedClickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
                     onClick = onToggle,
+                    onLongClick = onLongClick?.let { f -> { haptic.performHapticFeedback(HapticFeedbackType.LongPress); f() } },
                 )
                 .padding(start = Ui.Gutter, end = 12.dp, top = 14.dp, bottom = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -944,7 +1018,37 @@ private fun SectionHeader(title: String, count: Int, expanded: Boolean, divider:
     }
 }
 
-// --- Long-press menu ------------------------------------------------------------
+// --- A named section's header, with its long-press menu -------------------------
+
+@Composable
+private fun CustomSectionHeader(
+    item: Item.SectionHeader,
+    vm: LauncherViewModel,
+    onToggle: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Box {
+        SectionHeader(
+            title = item.section.name.uppercase(),
+            count = item.count,
+            expanded = item.expanded,
+            divider = false,
+            onLongClick = { menuOpen = true },
+            onToggle = onToggle,
+        )
+        RippleMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            MenuLabel(item.section.name)
+            RippleMenuItem("Rename", { menuOpen = false; onRename() })
+            if (!item.first) RippleMenuItem("Move up", { menuOpen = false; vm.moveSection(item.section.id, -1) })
+            if (!item.last) RippleMenuItem("Move down", { menuOpen = false; vm.moveSection(item.section.id, 1) })
+            RippleMenuItem("Delete section", { menuOpen = false; onDelete() }, destructive = true)
+        }
+    }
+}
+
+// --- Long-press menu for an app ---------------------------------------------------
 
 @Composable
 private fun AppMenu(
@@ -958,22 +1062,152 @@ private fun AppMenu(
     moveUpLabel: String = "Move up",
     moveDownLabel: String = "Move down",
 ) {
+    // Page 0: actions. Page 1: "Move to…" destinations. Resets each time the menu opens.
+    var page by remember(expanded) { mutableStateOf(0) }
+    val sections by vm.sections.collectAsStateWithLifecycle()
+    // Re-read when these change so the checkmark is right.
+    vm.favoriteKeys.collectAsStateWithLifecycle().value
+    vm.sectionOf.collectAsStateWithLifecycle().value
+    vm.lessUsedKeys.collectAsStateWithLifecycle().value
+    val current = vm.destinationOf(app)
+
     RippleMenu(expanded = expanded, onDismissRequest = onDismiss) {
-        MenuLabel(app.label)
-        RippleMenuItem(if (isFavorite) "Remove from favorites" else "Add to favorites", { onDismiss(); vm.toggleFavorite(app) })
-        if (canMoveUp) RippleMenuItem(moveUpLabel, { onDismiss(); vm.moveFavorite(app, -1) })
-        if (canMoveDown) RippleMenuItem(moveDownLabel, { onDismiss(); vm.moveFavorite(app, 1) })
-        val secondary by vm.secondaryKeys.collectAsStateWithLifecycle()
-        if (!isFavorite) RippleMenuItem(
-            if (app.key in secondary) "Remove from Secondary" else "Add to Secondary",
-            { onDismiss(); vm.toggleSecondary(app) },
+        if (page == 0) {
+            MenuLabel(app.label)
+            RippleMenuItem(if (isFavorite) "Remove from favorites" else "Add to favorites", { onDismiss(); vm.toggleFavorite(app) })
+            if (canMoveUp) RippleMenuItem(moveUpLabel, { onDismiss(); vm.moveFavorite(app, -1) })
+            if (canMoveDown) RippleMenuItem(moveDownLabel, { onDismiss(); vm.moveFavorite(app, 1) })
+            RippleMenuItem(
+                "Move to…",
+                { page = 1 },
+                trailing = {
+                    Icon(
+                        painterResource(R.drawable.ic_back), contentDescription = null, tint = Ui.InkMuted,
+                        modifier = Modifier.size(20.dp).graphicsLayer { rotationZ = 180f },
+                    )
+                },
+            )
+            RippleMenuItem(
+                if (current == Destination.Hidden) "Unhide" else "Hide",
+                { onDismiss(); vm.toggleLessUsed(app) },
+            )
+            RippleMenuItem("App info", { onDismiss(); vm.openAppInfo(app) })
+            RippleMenuItem("Uninstall", { onDismiss(); vm.uninstall(app) }, destructive = true)
+        } else {
+            RippleMenuItem("Back", { page = 0 }, icon = R.drawable.ic_back)
+            MenuLabel("Move ${app.label} to")
+            val options = buildList<Pair<String, Destination>> {
+                add("Favorites" to Destination.Favorites)
+                sections.forEach { add(it.name to Destination.InSection(it.id)) }
+                add("A–Z list" to Destination.List)
+                add("Hidden" to Destination.Hidden)
+            }
+            options.forEach { (label, dest) ->
+                RippleMenuItem(
+                    label,
+                    { onDismiss(); vm.moveApp(app, dest) },
+                    trailing = {
+                        if (dest == current) Icon(painterResource(R.drawable.ic_check), contentDescription = "Current", tint = Accent, modifier = Modifier.size(20.dp))
+                    },
+                )
+            }
+        }
+    }
+}
+
+// --- Dialogs ------------------------------------------------------------------------
+
+@Composable
+private fun DialogCard(title: String, content: @Composable () -> Unit, actions: @Composable () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .glass(RoundedCornerShape(24.dp))
+            .padding(start = 20.dp, end = 12.dp, top = 20.dp, bottom = 8.dp),
+    ) {
+        Text(title, style = Type.BodyStrong.copy(fontSize = 18.sp, shadow = null), color = Ui.Ink, modifier = Modifier.padding(end = 8.dp))
+        Spacer(Modifier.height(14.dp))
+        Box(Modifier.padding(end = 8.dp)) { content() }
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { actions() }
+    }
+}
+
+@Composable
+private fun DialogButton(label: String, color: Color, enabled: Boolean = true, onClick: () -> Unit) {
+    Text(
+        label,
+        style = Type.BodyStrong.copy(shadow = null),
+        color = if (enabled) color else color.copy(alpha = 0.35f),
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+    )
+}
+
+@Composable
+private fun NameDialog(
+    title: String,
+    initial: String,
+    confirmLabel: String,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var name by remember { mutableStateOf(initial) }
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+    Dialog(onDismissRequest = onDismiss) {
+        DialogCard(
+            title = title,
+            content = {
+                val shape = RoundedCornerShape(14.dp)
+                BasicTextField(
+                    value = name,
+                    onValueChange = { name = it.take(30) },
+                    singleLine = true,
+                    textStyle = Type.Body.copy(color = Ui.Ink, shadow = null),
+                    cursorBrush = SolidColor(Accent),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { if (name.isNotBlank()) onConfirm(name) }),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color.White.copy(alpha = 0.08f), shape)
+                        .border(1.dp, Color.White.copy(alpha = 0.10f), shape)
+                        .padding(horizontal = 14.dp, vertical = 14.dp)
+                        .focusRequester(focusRequester),
+                    decorationBox = { field ->
+                        Box {
+                            if (name.isEmpty()) Text("Section name", style = Type.Body.copy(shadow = null), color = Ui.InkFaint)
+                            field()
+                        }
+                    },
+                )
+            },
+            actions = {
+                DialogButton("Cancel", Ui.InkMuted, onClick = onDismiss)
+                DialogButton(confirmLabel, Accent, enabled = name.isNotBlank()) { onConfirm(name) }
+            },
         )
-        val lessUsed by vm.lessUsedKeys.collectAsStateWithLifecycle()
-        RippleMenuItem(
-            if (app.key in lessUsed) "Unhide" else "Hide",
-            { onDismiss(); vm.toggleLessUsed(app) },
+    }
+}
+
+@Composable
+private fun ConfirmDialog(
+    title: String,
+    message: String,
+    confirmLabel: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        DialogCard(
+            title = title,
+            content = { Text(message, style = Type.Caption.copy(shadow = null), color = Ui.InkMuted) },
+            actions = {
+                DialogButton("Cancel", Ui.InkMuted, onClick = onDismiss)
+                DialogButton(confirmLabel, Ui.Danger, onClick = onConfirm)
+            },
         )
-        RippleMenuItem("App info", { onDismiss(); vm.openAppInfo(app) })
-        RippleMenuItem("Uninstall", { onDismiss(); vm.uninstall(app) }, destructive = true)
     }
 }
