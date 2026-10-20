@@ -23,6 +23,13 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.SolidColor
 import com.example.ripplelauncher.Backdrop
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -32,7 +39,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.example.ripplelauncher.R
 import androidx.compose.ui.res.painterResource
@@ -50,8 +56,6 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
@@ -129,7 +133,6 @@ private const val LESS_USED_MARK = '⋯'
 private sealed interface Item {
     val key: String
 
-    data object Header : Item { override val key = "header" }
     data object Hint : Item { override val key = "hint" }
     data object Gap : Item { override val key = "gap" }
     /** The favorites grid. Rows alternate 5 / 4 / 5 icons. */
@@ -164,7 +167,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     var lessUsedExpanded by rememberSaveable { mutableStateOf(false) }
 
     val (items, letterIndex) = remember(apps, favorites, query, lessUsedKeys, lessUsedExpanded) {
-        val list = mutableListOf<Item>(Item.Header)
+        val list = mutableListOf<Item>()
         val index = mutableMapOf(FAVORITES_MARK to 0)
         if (query.isBlank()) {
             if (favorites.isEmpty()) list += Item.Hint
@@ -206,7 +209,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
         }
     }
 
-    val scrolledDown by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 } }
+    val scrolledDown by remember {
+        derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0 }
+    }
     val searchOpen by vm.searchOpen.collectAsStateWithLifecycle()
     BackHandler(enabled = scrolledDown || query.isNotEmpty() || searchOpen) { vm.goHome() }
 
@@ -236,21 +241,55 @@ fun LauncherScreen(vm: LauncherViewModel) {
     }
     val animatedScrim by animateColorAsState(scrim, tween(300), label = "backdrop")
 
-    Box(Modifier.fillMaxSize().background(animatedScrim)) {
+    // Everything above the favorites stays put; only the favorites and the
+    // app list scroll, fading out as they slide under the fixed top area.
+    val fade = 28.dp
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(animatedScrim)
+            .systemBarsPadding()
+            .imePadding(),
+    ) {
+        var headerPull by remember { mutableFloatStateOf(0f) }
+        Box(
+            // Swipe down on the fixed top area to open notifications.
+            Modifier.pointerInput(Unit) {
+                detectVerticalDragGestures(
+                    onDragStart = { headerPull = 0f },
+                    onDragEnd = { if (headerPull > 160f) vm.expandNotifications() },
+                    onVerticalDrag = { _, amount -> headerPull += amount },
+                )
+            },
+        ) {
+            Header(query, vm, onGo = {
+                (items.firstOrNull { it is Item.App } as? Item.App)?.let { vm.launch(it.app) }
+            })
+        }
+
+        Box(Modifier.weight(1f).fillMaxWidth()) {
         LazyColumn(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
                 .nestedScroll(pullDown)
-                .systemBarsPadding()
-                .imePadding(),
-            contentPadding = PaddingValues(end = 48.dp, bottom = 96.dp),
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    val fadePx = fade.toPx()
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(Color.Transparent, Color.Black),
+                            startY = 0f,
+                            endY = fadePx,
+                        ),
+                        blendMode = BlendMode.DstIn,
+                    )
+                },
+            contentPadding = PaddingValues(top = fade, end = 48.dp, bottom = 96.dp),
         ) {
             items(items, key = { it.key }) { item ->
                 when (item) {
-                    Item.Header -> Header(query, vm, onGo = {
-                        (items.firstOrNull { it is Item.App } as? Item.App)?.let { vm.launch(it.app) }
-                    })
                     Item.Hint -> Text(
                         "Long-press any app below to add it to favorites.",
                         color = Color.White.copy(alpha = 0.7f),
@@ -282,10 +321,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 },
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
-                    .fillMaxHeight(0.72f)
+                    .fillMaxHeight(0.85f)
                     .width(36.dp)
                     .padding(end = 6.dp),
             )
+        }
         }
     }
 }
