@@ -23,6 +23,15 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.SolidColor
 import com.example.ripplelauncher.Backdrop
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.HazeTint
+import dev.chrisbanes.haze.haze
+import dev.chrisbanes.haze.hazeChild
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -68,7 +77,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.input.pointer.positionChange
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.zIndex
 import kotlin.math.roundToInt
@@ -252,52 +260,42 @@ fun LauncherScreen(vm: LauncherViewModel) {
     }
     val animatedScrim by animateColorAsState(scrim, tween(300), label = "backdrop")
 
-    // Everything above the favorites stays put; only the favorites and the
-    // app list scroll, fading out as they slide under the fixed top area.
-    val fade = 24.dp
-    Column(
-        Modifier
-            .fillMaxSize()
-            .background(animatedScrim)
-            .systemBarsPadding()
-            .imePadding(),
-    ) {
-        var headerPull by remember { mutableFloatStateOf(0f) }
-        Box(
-            // Swipe down on the fixed top area to open notifications.
-            Modifier.pointerInput(Unit) {
-                detectVerticalDragGestures(
-                    onDragStart = { headerPull = 0f },
-                    onDragEnd = { if (headerPull > 160f) vm.expandNotifications() },
-                    onVerticalDrag = { _, amount -> headerPull += amount },
-                )
-            },
-        ) {
-            Header(query, vm, onGo = {
-                (items.firstOrNull { it is Item.App } as? Item.App)?.let { vm.launch(it.app) }
-            })
-        }
+    // The top area stays put. The favorites and app list scroll up *under* it,
+    // where they show through as a soft, frosted blur, just a hint of what's there.
+    val hazeState = remember { HazeState() }
+    var headerPx by remember { mutableIntStateOf(0) }
+    val headerHeight = with(LocalDensity.current) { headerPx.toDp() }
+    val fade = 28.dp
 
-        Box(Modifier.weight(1f).fillMaxWidth()) {
+    Box(Modifier.fillMaxSize().background(animatedScrim)) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .navigationBarsPadding()
+                .imePadding(),
+        ) {
         LazyColumn(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
                 .nestedScroll(pullDown)
+                // Hide the sharp copy under the top area, fading in just below it.
+                // (The blurred copy the top area shows is taken before this mask.)
                 .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
                 .drawWithContent {
                     drawContent()
-                    val fadePx = fade.toPx()
+                    val bottom = headerPx.toFloat()
                     drawRect(
                         brush = Brush.verticalGradient(
                             colors = listOf(Color.Transparent, Color.Black),
-                            startY = 0f,
-                            endY = fadePx,
+                            startY = bottom - fade.toPx(),
+                            endY = bottom,
                         ),
                         blendMode = BlendMode.DstIn,
                     )
-                },
-            contentPadding = PaddingValues(top = fade, end = 48.dp, bottom = 96.dp),
+                }
+                .haze(hazeState),
+            contentPadding = PaddingValues(top = headerHeight + 4.dp, end = 48.dp, bottom = 96.dp),
         ) {
             items(items, key = { it.key }) { item ->
                 // Rows fade and slide into place when the list changes (e.g. expanding Less used).
@@ -329,19 +327,56 @@ fun LauncherScreen(vm: LauncherViewModel) {
         }
 
         if (query.isBlank() && apps.isNotEmpty()) {
-            AlphabetScroller(
-                letters = letters,
-                onLetterSelected = { letter ->
-                    focus.clearFocus()
-                    letterIndex[letter]?.let { i -> scope.launch { listState.scrollToItem(i) } }
-                },
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .fillMaxHeight(0.85f)
-                    .width(36.dp)
-                    .padding(end = 6.dp),
-            )
+            // Beside the list only, below the top area.
+            Box(Modifier.fillMaxSize().padding(top = headerHeight)) {
+                AlphabetScroller(
+                    letters = letters,
+                    onLetterSelected = { letter ->
+                        focus.clearFocus()
+                        letterIndex[letter]?.let { i -> scope.launch { listState.scrollToItem(i) } }
+                    },
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .fillMaxHeight(0.85f)
+                        .width(36.dp)
+                        .padding(end = 6.dp),
+                )
+            }
         }
+        }
+
+        // The fixed top area, frosted over whatever is scrolling beneath it.
+        var headerPull by remember { mutableFloatStateOf(0f) }
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .onSizeChanged { headerPx = it.height }
+                .hazeChild(hazeState) {
+                    backgroundColor = Color.Transparent
+                    blurRadius = 26.dp
+                    noiseFactor = 0f
+                    tints = listOf(HazeTint(Color.Black.copy(alpha = 0.10f)))
+                    alpha = 0.7f
+                    // Soften the bottom edge so the blur melts into the list.
+                    mask = Brush.verticalGradient(
+                        0f to Color.Black,
+                        0.82f to Color.Black,
+                        1f to Color.Transparent,
+                    )
+                }
+                // Swipe down on the top area to open notifications.
+                .pointerInput(Unit) {
+                    detectVerticalDragGestures(
+                        onDragStart = { headerPull = 0f },
+                        onDragEnd = { if (headerPull > 160f) vm.expandNotifications() },
+                        onVerticalDrag = { _, amount -> headerPull += amount },
+                    )
+                }
+                .statusBarsPadding(),
+        ) {
+            Header(query, vm, onGo = {
+                (items.firstOrNull { it is Item.App } as? Item.App)?.let { vm.launch(it.app) }
+            })
         }
     }
 }

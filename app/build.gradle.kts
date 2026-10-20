@@ -12,8 +12,8 @@ android {
         applicationId = "com.example.ripplelauncher"
         minSdk = 26
         targetSdk = 35
-        versionCode = 23
-        versionName = "2.3"
+        versionCode = 24
+        versionName = "2.4"
     }
 
     // A fixed key, so each new build installs over the old one without uninstalling.
@@ -64,4 +64,6 @@ dependencies {
     implementation("androidx.compose.animation:animation")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-core")
+    // Frosted backdrop blur for the fixed top area
+    implementation("dev.chrisbanes.haze:haze:1.1.1")
 }
