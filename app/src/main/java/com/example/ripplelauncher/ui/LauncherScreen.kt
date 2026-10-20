@@ -23,6 +23,19 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.SolidColor
 import com.example.ripplelauncher.Backdrop
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.BlendMode
@@ -47,12 +60,10 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateIntOffsetAsState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberUpdatedState
@@ -243,7 +254,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
 
     // Everything above the favorites stays put; only the favorites and the
     // app list scroll, fading out as they slide under the fixed top area.
-    val fade = 28.dp
+    val fade = 24.dp
     Column(
         Modifier
             .fillMaxSize()
@@ -289,14 +300,20 @@ fun LauncherScreen(vm: LauncherViewModel) {
             contentPadding = PaddingValues(top = fade, end = 48.dp, bottom = 96.dp),
         ) {
             items(items, key = { it.key }) { item ->
+                // Rows fade and slide into place when the list changes (e.g. expanding Less used).
+                Box(Modifier.animateItem()) {
                 when (item) {
                     Item.Hint -> Text(
                         "Long-press any app below to add it to favorites.",
-                        color = Color.White.copy(alpha = 0.7f),
-                        style = MaterialTheme.typography.bodyLarge.copy(shadow = TextShadow),
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
+                        style = Type.Caption,
+                        color = Ui.InkMuted,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = Ui.Gutter, end = 4.dp)
+                            .panel(RoundedCornerShape(20.dp))
+                            .padding(horizontal = 16.dp, vertical = 16.dp),
                     )
-                    Item.Gap -> Spacer(Modifier.height(28.dp))
+                    Item.Gap -> Spacer(Modifier.height(16.dp))
                     is Item.Favorites -> FavoriteGrid(item.apps, vm)
                     is Item.App -> Box(if (item.lessUsed) Modifier.alpha(0.75f) else Modifier) {
                         AppRow(
@@ -308,6 +325,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         )
                     }
                     is Item.LessUsedHeader -> LessUsedHeader(item) { lessUsedExpanded = !lessUsedExpanded }
+                }
                 }
             }
         }
@@ -330,35 +348,39 @@ fun LauncherScreen(vm: LauncherViewModel) {
     }
 }
 
-// --- Top of the list: clock and search ----------------------------------------
+// --- Fixed top area: weather, clock, brightness, icon row ---------------------
 
 @Composable
 private fun Header(query: String, vm: LauncherViewModel, onGo: () -> Unit) {
-    // Weather, time and date at the top; brightness; then a row of icons
+    // Weather, time and date at the top; brightness; then a row of glass buttons
     // (search, camera, theme, settings). Tapping search swaps the row for the search box.
     val searchOpen by vm.searchOpen.collectAsStateWithLifecycle()
-    Column(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 16.dp)) {
-        WeatherLine(vm, Modifier.padding(start = 24.dp))
-        Clock(Modifier.padding(start = 24.dp, top = 2.dp), onClick = vm::openClockApp)
-        Spacer(Modifier.height(28.dp))
+    Column(Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp)) {
+        WeatherLine(vm, Modifier.padding(horizontal = Ui.Gutter))
+        Spacer(Modifier.height(4.dp))
+        Clock(Modifier.padding(horizontal = Ui.Gutter), onClick = vm::openClockApp)
+        Spacer(Modifier.height(22.dp))
         BrightnessBar(vm)
-        Spacer(Modifier.height(20.dp))
-        Box(Modifier.fillMaxWidth().height(52.dp), contentAlignment = Alignment.CenterStart) {
-            if (searchOpen || query.isNotEmpty()) {
-                SearchBar(query, vm, onGo)
-            } else {
-                Row(Modifier.padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { vm.openSearch() }) {
-                        Icon(Icons.Rounded.Search, contentDescription = "Search", tint = Color.White.copy(alpha = 0.85f))
-                    }
-                    TopActions(vm)
-                }
+        Spacer(Modifier.height(14.dp))
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Ui.Gutter)
+                .height(48.dp),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            AnimatedContent(
+                targetState = searchOpen || query.isNotEmpty(),
+                transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(120)) },
+                label = "search",
+            ) { open ->
+                if (open) SearchBar(query, vm, onGo) else ActionRow(vm)
             }
         }
     }
 }
 
-/** e.g. "☁️ 52° Cloudy · H 60° L 45° · Chicago". Tap opens the weather app. */
+/** e.g. [cloud]  52°  Cloudy · H 60° L 45° · Chicago. Tap opens the weather app. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun WeatherLine(vm: LauncherViewModel, modifier: Modifier = Modifier) {
@@ -376,7 +398,6 @@ private fun WeatherLine(vm: LauncherViewModel, modifier: Modifier = Modifier) {
         onPauseOrDispose { }
     }
 
-    val style = MaterialTheme.typography.bodyMedium.copy(shadow = TextShadow)
     // Tap: open the weather app. Long-press: refresh now.
     val haptic = LocalHapticFeedback.current
     val tap = Modifier.combinedClickable(
@@ -395,43 +416,39 @@ private fun WeatherLine(vm: LauncherViewModel, modifier: Modifier = Modifier) {
     )
 
     val w = weather
-    when {
-        !granted -> Text(
-            "Tap to show weather",
-            color = Color.White.copy(alpha = 0.6f),
-            fontSize = 15.sp,
-            style = style,
-            modifier = modifier.then(tap),
-        )
-        w == null -> Text(
-            "Loading weather…",
-            color = Color.White.copy(alpha = 0.6f),
-            fontSize = 15.sp,
-            style = style,
-            modifier = modifier.then(tap),
-        )
-        else -> Row(modifier.then(tap), verticalAlignment = Alignment.CenterVertically) {
-            Text("${w.symbol}  ${w.temp}°", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium, style = style)
-            Text(
-                buildString {
-                    append("  ${w.summary}  ·  H ${w.high}°  L ${w.low}°")
-                    w.place?.let { append("  ·  $it") }
-                },
-                color = Color.White.copy(alpha = 0.7f),
-                fontSize = 15.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = style,
-            )
+    Row(modifier.then(tap).height(24.dp), verticalAlignment = Alignment.CenterVertically) {
+        when {
+            !granted -> Text("Tap to show weather", style = Type.Caption, color = Ui.InkMuted)
+            w == null -> Text("Loading weather…", style = Type.Caption, color = Ui.InkFaint)
+            else -> {
+                Icon(painterResource(w.icon), contentDescription = w.summary, tint = Ui.Ink, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("${w.temp}°", style = Type.BodyStrong, color = Ui.Ink)
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    buildString {
+                        append("${w.summary}  ·  H ${w.high}°  L ${w.low}°")
+                        w.place?.let { append("  ·  $it") }
+                    },
+                    style = Type.Caption,
+                    color = Ui.InkMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
 
-/** Screen brightness slider. Asks for the system permission on first use. */
+/**
+ * Brightness as a glass pill that fills from the left, like Control Center.
+ * Drag anywhere on it. Asks for the system permission on first use.
+ */
 @Composable
 private fun BrightnessBar(vm: LauncherViewModel) {
     var level by remember { mutableFloatStateOf(vm.readBrightness()) }
     var allowed by remember { mutableStateOf(vm.canChangeBrightness()) }
+    val haptic = LocalHapticFeedback.current
 
     // Coming back from Settings (or after brightness changed elsewhere): refresh.
     LifecycleResumeEffect(Unit) {
@@ -440,92 +457,101 @@ private fun BrightnessBar(vm: LauncherViewModel) {
         onPauseOrDispose { }
     }
 
-    Row(
+    val shape = RoundedCornerShape(22.dp)
+    val shown by animateFloatAsState(level, spring(stiffness = Spring.StiffnessHigh), label = "brightness")
+    BoxWithConstraints(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 24.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = Ui.Gutter)
+            .height(44.dp)
+            .glass(shape)
+            .clip(shape)
+            .pointerInput(allowed) {
+                detectTapGestures { if (!allowed) vm.requestBrightnessPermission() }
+            }
+            .pointerInput(allowed) {
+                detectHorizontalDragGestures(
+                    onDragStart = { if (!allowed) vm.requestBrightnessPermission() },
+                    onDragEnd = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) },
+                ) { change, dx ->
+                    if (allowed) {
+                        change.consume()
+                        level = (level + dx / size.width).coerceIn(0.01f, 1f)
+                        vm.setBrightness(level)
+                    }
+                }
+            },
     ) {
+        val minFill = 44.dp
+        val fill = maxOf(minFill, maxWidth * shown)
+        Box(
+            Modifier
+                .fillMaxHeight()
+                .width(fill)
+                .background(Brush.horizontalGradient(listOf(Color.White.copy(alpha = 0.78f), Color.White.copy(alpha = 0.92f)))),
+        )
         Icon(
             painterResource(R.drawable.ic_brightness),
             contentDescription = "Brightness",
-            tint = Color.White.copy(alpha = 0.6f),
-            modifier = Modifier.size(16.dp),
-        )
-        Spacer(Modifier.width(12.dp))
-        Slider(
-            value = level,
-            onValueChange = {
-                if (allowed) {
-                    level = it
-                    vm.setBrightness(it)
-                } else {
-                    vm.requestBrightnessPermission()
-                }
-            },
-            colors = SliderDefaults.colors(
-                thumbColor = Color.White,
-                activeTrackColor = Color.White.copy(alpha = 0.85f),
-                inactiveTrackColor = Color.White.copy(alpha = 0.22f),
-            ),
-            modifier = Modifier.weight(1f).height(32.dp),
-        )
-        Spacer(Modifier.width(12.dp))
-        Icon(
-            painterResource(R.drawable.ic_brightness),
-            contentDescription = null,
-            tint = Color.White.copy(alpha = 0.9f),
-            modifier = Modifier.size(22.dp),
+            tint = Color(0xFF2A2E35),
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .padding(start = 12.dp)
+                .size(20.dp),
         )
     }
 }
 
-/** Top right: appearance menu and a shortcut to Android's Settings. */
+/** A round glass button with an outline icon. */
 @Composable
-private fun TopActions(vm: LauncherViewModel) {
+private fun GlassButton(icon: Int, description: String, onClick: () -> Unit) {
+    val source = remember { MutableInteractionSource() }
+    Box(
+        Modifier
+            .size(48.dp)
+            .pressScale(source)
+            .glass(CircleShape)
+            .clip(CircleShape)
+            .clickable(interactionSource = source, indication = null, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(painterResource(icon), contentDescription = description, tint = Ui.Ink.copy(alpha = 0.92f), modifier = Modifier.size(22.dp))
+    }
+}
+
+/** Search, camera, appearance and system settings. */
+@Composable
+private fun ActionRow(vm: LauncherViewModel) {
     val backdrop by vm.backdrop.collectAsStateWithLifecycle()
     var menuOpen by remember { mutableStateOf(false) }
-    Row(Modifier.padding(end = 4.dp)) {
-        IconButton(onClick = { vm.openCamera() }) {
-            Icon(
-                painterResource(R.drawable.ic_camera),
-                contentDescription = "Camera",
-                tint = Color.White.copy(alpha = 0.85f),
-                modifier = Modifier.size(22.dp),
-            )
-        }
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        GlassButton(R.drawable.ic_search, "Search") { vm.openSearch() }
+        GlassButton(R.drawable.ic_camera, "Camera") { vm.openCamera() }
         Box {
-            IconButton(onClick = { menuOpen = true }) {
-                Icon(Icons.Rounded.Edit, contentDescription = "Appearance", tint = Color.White.copy(alpha = 0.85f))
-            }
-            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                Text(
-                    "Background",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = Accent,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                )
+            GlassButton(R.drawable.ic_palette, "Appearance") { menuOpen = true }
+            RippleMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                MenuLabel("Background")
                 Backdrop.entries.forEach { option ->
-                    DropdownMenuItem(
-                        text = { Text(option.label) },
-                        trailingIcon = {
-                            if (option == backdrop) Icon(Icons.Rounded.Check, contentDescription = null, tint = Accent)
-                        },
+                    RippleMenuItem(
+                        text = option.label,
                         onClick = { vm.setBackdrop(option); menuOpen = false },
+                        trailing = {
+                            if (option == backdrop) {
+                                Icon(painterResource(R.drawable.ic_check), contentDescription = "Selected", tint = Accent, modifier = Modifier.size(20.dp))
+                            }
+                        },
                     )
                 }
             }
         }
-        IconButton(onClick = { vm.openSystemSettings() }) {
-            Icon(Icons.Rounded.Settings, contentDescription = "System settings", tint = Color.White.copy(alpha = 0.85f))
-        }
+        GlassButton(R.drawable.ic_settings, "System settings") { vm.openSystemSettings() }
     }
 }
 
-/** A raised, frosted pill so search stands apart from the app list. */
+/** The search box, in the same glass style as the buttons it replaces. */
 @Composable
 private fun SearchBar(query: String, vm: LauncherViewModel, onGo: () -> Unit) {
-    val shape = RoundedCornerShape(28.dp)
+    val shape = RoundedCornerShape(24.dp)
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(Unit) {
@@ -536,42 +562,35 @@ private fun SearchBar(query: String, vm: LauncherViewModel, onGo: () -> Unit) {
         value = query,
         onValueChange = vm::setQuery,
         singleLine = true,
-        textStyle = MaterialTheme.typography.bodyLarge.copy(color = Color.White),
+        textStyle = Type.Body.copy(color = Ui.Ink, shadow = null),
         cursorBrush = SolidColor(Accent),
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
         keyboardActions = KeyboardActions(onGo = { onGo() }),
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-            .shadow(elevation = 10.dp, shape = shape, ambientColor = Color.Black, spotColor = Color.Black)
-            .background(
-                Brush.verticalGradient(listOf(Color(0xFF3A404A), Color(0xFF262A31))),
-                shape,
-            )
-            .border(1.dp, Color.White.copy(alpha = 0.10f), shape)
-            .height(52.dp)
+            .height(48.dp)
+            .glass(shape)
             .focusRequester(focusRequester),
         decorationBox = { field ->
             Row(
-                Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                Modifier.fillMaxSize().padding(start = 14.dp, end = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(Icons.Rounded.Search, contentDescription = null, tint = Accent, modifier = Modifier.size(22.dp))
-                Spacer(Modifier.width(12.dp))
+                Icon(painterResource(R.drawable.ic_search), contentDescription = null, tint = Ui.InkMuted, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(10.dp))
                 Box(Modifier.weight(1f)) {
-                    if (query.isEmpty()) {
-                        Text("Search apps", color = Color.White.copy(alpha = 0.5f), style = MaterialTheme.typography.bodyLarge)
-                    }
+                    if (query.isEmpty()) Text("Search apps", style = Type.Body.copy(shadow = null), color = Ui.InkFaint)
                     field()
                 }
-                IconButton(onClick = { vm.closeSearch() }, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Rounded.Close, contentDescription = "Close search", tint = Color.White.copy(alpha = 0.7f))
+                IconButton(onClick = { vm.closeSearch() }, modifier = Modifier.size(36.dp)) {
+                    Icon(painterResource(R.drawable.ic_close), contentDescription = "Close search", tint = Ui.InkMuted, modifier = Modifier.size(20.dp))
                 }
             }
         },
     )
 }
 
+/** Large, light time with a small AM/PM, then a quiet date: one line. */
 @Composable
 private fun Clock(modifier: Modifier = Modifier, onClick: () -> Unit) {
     val context = LocalContext.current
@@ -582,9 +601,10 @@ private fun Clock(modifier: Modifier = Modifier, onClick: () -> Unit) {
             delay(60_000L - System.currentTimeMillis() % 60_000L)
         }
     }
-    // One line, e.g. "9:46 AM · Sun, Oct 18". Shows AM/PM unless the phone is set to 24-hour.
-    val pattern = if (DateFormat.is24HourFormat(context)) "H:mm" else "h:mm a"
-    val time = java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault()).format(now)
+    val is24 = DateFormat.is24HourFormat(context)
+    val locale = java.util.Locale.getDefault()
+    val time = java.text.SimpleDateFormat(if (is24) "H:mm" else "h:mm", locale).format(now)
+    val amPm = if (is24) null else java.text.SimpleDateFormat("a", locale).format(now)
     val date = LocalDate.now().format(DateTimeFormatter.ofPattern("EEE, MMM d"))
 
     Row(
@@ -593,21 +613,14 @@ private fun Clock(modifier: Modifier = Modifier, onClick: () -> Unit) {
             indication = null,
             onClick = onClick,
         ),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            time,
-            color = Color.White,
-            fontSize = 26.sp,
-            fontWeight = FontWeight.Medium,
-            style = MaterialTheme.typography.bodyMedium.copy(shadow = TextShadow),
-        )
-        Text(
-            "  ·  $date",
-            color = Color.White.copy(alpha = 0.7f),
-            fontSize = 20.sp,
-            style = MaterialTheme.typography.bodyMedium.copy(shadow = TextShadow),
-        )
+        Text(time, style = Type.Display, color = Ui.Ink, modifier = Modifier.alignByBaseline())
+        if (amPm != null) {
+            Spacer(Modifier.width(5.dp))
+            Text(amPm, style = Type.DisplaySuffix, color = Ui.Ink, modifier = Modifier.alignByBaseline())
+        }
+        Spacer(Modifier.width(14.dp))
+        Text(date, style = Type.Body, color = Ui.InkMuted, modifier = Modifier.alignByBaseline())
     }
 }
 
@@ -646,10 +659,19 @@ private fun FavoriteGrid(favorites: List<AppEntry>, vm: LauncherViewModel) {
     var dragCenter by remember { mutableStateOf(Offset.Zero) }
     var menuKey by remember { mutableStateOf<String?>(null) }
 
+    var pressedKey by remember { mutableStateOf<String?>(null) }
+
+    // A quiet panel gives the favorites a home, separate from the A–Z list.
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = Ui.Gutter, end = 4.dp)
+            .panel(RoundedCornerShape(26.dp))
+            .padding(horizontal = 6.dp, vertical = 8.dp)
+    ) {
     BoxWithConstraints(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp)
             .height(FavRowHeight * rowsFor(order.size))
     ) {
         val cellW = with(density) { maxWidth.toPx() } / 5f
@@ -677,6 +699,8 @@ private fun FavoriteGrid(favorites: List<AppEntry>, vm: LauncherViewModel) {
                             (centerOf(it) - down.position).getDistance() < hitRadius
                         } ?: return@awaitEachGesture
                         val app = current[hit]
+                        pressedKey = app.key
+                        try {
 
                         // 1 = released (tap), 2 = cancelled (e.g. list scrolled), 0 = held long enough
                         var outcome = 0
@@ -714,6 +738,9 @@ private fun FavoriteGrid(favorites: List<AppEntry>, vm: LauncherViewModel) {
                         dragKey = null
                         if (moved) vm.setFavoriteOrder(order.map { it.key })
                         else menuKey = app.key
+                        } finally {
+                            pressedKey = null
+                        }
                     }
                 }
         ) {
@@ -723,7 +750,15 @@ private fun FavoriteGrid(favorites: List<AppEntry>, vm: LauncherViewModel) {
                     val target = centerOf(i)
                     val slot = IntOffset((target.x - half).roundToInt(), (target.y - half).roundToInt())
                     val animated by animateIntOffsetAsState(slot, tween(180), label = "fav")
-                    val scale by animateFloatAsState(if (dragging) 1.2f else 1f, tween(120), label = "lift")
+                    val scale by animateFloatAsState(
+                        when {
+                            dragging -> 1.2f
+                            app.key == pressedKey -> 0.88f
+                            else -> 1f
+                        },
+                        spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMedium),
+                        label = "lift",
+                    )
                     Box(
                         Modifier
                             .offset {
@@ -750,9 +785,10 @@ private fun FavoriteGrid(favorites: List<AppEntry>, vm: LauncherViewModel) {
             }
         }
     }
+    }
 }
 
-// --- One app row: favorites are big, the A–Z list has a letter column ---------
+// --- One app row in the A–Z list ---------------------------------------------
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -767,49 +803,44 @@ private fun AppRow(
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val haptic = LocalHapticFeedback.current
+    val source = remember { MutableInteractionSource() }
+    val pressed by source.collectIsPressedAsState()
+    val highlight by animateColorAsState(
+        if (pressed || menuOpen) Color.White.copy(alpha = 0.08f) else Color.Transparent,
+        tween(120),
+        label = "row",
+    )
+    val shape = RoundedCornerShape(14.dp)
 
     Box {
         Row(
             Modifier
                 .fillMaxWidth()
+                .padding(horizontal = 8.dp)
+                .pressScale(source, pressed = 0.985f)
+                .clip(shape)
+                .background(highlight, shape)
                 .combinedClickable(
+                    interactionSource = source,
+                    indication = null,
                     onClick = { vm.launch(app) },
                     onLongClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         menuOpen = true
                     },
                 )
-                .padding(
-                    start = if (big) 24.dp else 12.dp,
-                    end = 12.dp,
-                    top = if (big) 9.dp else 7.dp,
-                    bottom = if (big) 9.dp else 7.dp,
-                ),
+                // 8 + 12 = the 20dp gutter everything else lines up to.
+                .padding(start = 12.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (!big) {
-                // Niagara-style: the group's letter sits beside its first app.
-                Box(Modifier.width(32.dp), contentAlignment = Alignment.Center) {
-                    if (letter != null) {
-                        Text(
-                            letter.toString(),
-                            color = Accent,
-                            style = MaterialTheme.typography.titleMedium.copy(shadow = TextShadow),
-                        )
-                    }
-                }
-                Spacer(Modifier.width(8.dp))
+            // Niagara-style: the group's letter sits beside its first app.
+            Box(Modifier.width(22.dp), contentAlignment = Alignment.CenterStart) {
+                if (letter != null) Text(letter.toString(), style = Type.Label.copy(fontSize = 13.sp, letterSpacing = 0.sp), color = Accent)
             }
+            Spacer(Modifier.width(8.dp))
             Image(app.icon, contentDescription = null, modifier = Modifier.size(32.dp))
             Spacer(Modifier.width(14.dp))
-            Text(
-                app.label,
-                color = Color.White,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = (if (big) MaterialTheme.typography.titleMedium.copy(fontSize = 18.sp) else MaterialTheme.typography.bodyLarge)
-                    .copy(shadow = TextShadow),
-            )
+            Text(app.label, style = Type.Body, color = Ui.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         AppMenu(app, isFavorite, vm, menuOpen, { menuOpen = false }, canMoveUp, canMoveDown)
     }
@@ -819,38 +850,35 @@ private fun AppRow(
 
 @Composable
 private fun LessUsedHeader(item: Item.LessUsedHeader, onToggle: () -> Unit) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(top = 20.dp)
-            .clickable(onClick = onToggle),
-    ) {
+    val turn by animateFloatAsState(if (item.expanded) 180f else 0f, tween(220), label = "chevron")
+    Column(Modifier.fillMaxWidth().padding(top = 24.dp)) {
         Box(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp)
+                .padding(horizontal = Ui.Gutter)
                 .height(1.dp)
-                .background(Color.White.copy(alpha = 0.15f)),
+                .background(Color.White.copy(alpha = 0.12f)),
         )
         Row(
-            Modifier.padding(start = 20.dp, end = 12.dp, top = 14.dp, bottom = 14.dp),
+            Modifier
+                .fillMaxWidth()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onToggle,
+                )
+                .padding(start = Ui.Gutter, end = 12.dp, top = 14.dp, bottom = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                "Less used",
-                color = Accent,
-                style = MaterialTheme.typography.titleSmall.copy(shadow = TextShadow),
-            )
-            Text(
-                "  ${item.count}",
-                color = Color.White.copy(alpha = 0.5f),
-                style = MaterialTheme.typography.titleSmall.copy(shadow = TextShadow),
-            )
+            Text("LESS USED", style = Type.Label, color = Accent)
+            Spacer(Modifier.width(10.dp))
+            Text("${item.count}", style = Type.Label, color = Ui.InkFaint)
             Spacer(Modifier.weight(1f))
             Icon(
-                if (item.expanded) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
+                painterResource(R.drawable.ic_chevron_down),
                 contentDescription = if (item.expanded) "Collapse" else "Expand",
-                tint = Color.White.copy(alpha = 0.7f),
+                tint = Ui.InkMuted,
+                modifier = Modifier.size(22.dp).graphicsLayer { rotationZ = turn },
             )
         }
     }
@@ -870,31 +898,17 @@ private fun AppMenu(
     moveUpLabel: String = "Move up",
     moveDownLabel: String = "Move down",
 ) {
-    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
-        DropdownMenuItem(
-            text = { Text(if (isFavorite) "Remove from favorites" else "Add to favorites") },
-            onClick = { onDismiss(); vm.toggleFavorite(app) },
-        )
-        if (canMoveUp) DropdownMenuItem(
-            text = { Text(moveUpLabel) },
-            onClick = { onDismiss(); vm.moveFavorite(app, -1) },
-        )
-        if (canMoveDown) DropdownMenuItem(
-            text = { Text(moveDownLabel) },
-            onClick = { onDismiss(); vm.moveFavorite(app, 1) },
-        )
+    RippleMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        MenuLabel(app.label)
+        RippleMenuItem(if (isFavorite) "Remove from favorites" else "Add to favorites", { onDismiss(); vm.toggleFavorite(app) })
+        if (canMoveUp) RippleMenuItem(moveUpLabel, { onDismiss(); vm.moveFavorite(app, -1) })
+        if (canMoveDown) RippleMenuItem(moveDownLabel, { onDismiss(); vm.moveFavorite(app, 1) })
         val lessUsed by vm.lessUsedKeys.collectAsStateWithLifecycle()
-        DropdownMenuItem(
-            text = { Text(if (app.key in lessUsed) "Move back to A–Z list" else "Move to Less used") },
-            onClick = { onDismiss(); vm.toggleLessUsed(app) },
+        RippleMenuItem(
+            if (app.key in lessUsed) "Move back to A–Z list" else "Move to Less used",
+            { onDismiss(); vm.toggleLessUsed(app) },
         )
-        DropdownMenuItem(
-            text = { Text("App info") },
-            onClick = { onDismiss(); vm.openAppInfo(app) },
-        )
-        DropdownMenuItem(
-            text = { Text("Uninstall") },
-            onClick = { onDismiss(); vm.uninstall(app) },
-        )
+        RippleMenuItem("App info", { onDismiss(); vm.openAppInfo(app) })
+        RippleMenuItem("Uninstall", { onDismiss(); vm.uninstall(app) }, destructive = true)
     }
 }

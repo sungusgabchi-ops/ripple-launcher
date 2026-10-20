@@ -29,6 +29,7 @@ data class WeatherInfo(
 ) {
     val summary: String get() = Weather.describe(code)
     val symbol: String get() = Weather.symbolFor(code, isDay)
+    val icon: Int get() = Weather.iconFor(code, isDay)
 
     fun toJson(): String = JSONObject()
         .put("temp", temp).put("high", high).put("low", low).put("code", code)
@@ -157,6 +158,18 @@ object Weather {
         95 -> "Thunderstorm"
         96, 99 -> "Thunderstorm, hail"
         else -> "—"
+    }
+
+    /** Matching outline icon (Material Symbols Rounded). */
+    internal fun iconFor(code: Int, isDay: Boolean): Int = when (code) {
+        0, 1 -> if (isDay) R.drawable.ic_wx_sun else R.drawable.ic_wx_moon
+        2 -> if (isDay) R.drawable.ic_wx_partly_day else R.drawable.ic_wx_partly_night
+        3 -> R.drawable.ic_wx_cloud
+        45, 48 -> R.drawable.ic_wx_fog
+        51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82 -> R.drawable.ic_wx_rain
+        71, 73, 75, 77, 85, 86 -> R.drawable.ic_wx_snow
+        95, 96, 99 -> R.drawable.ic_wx_storm
+        else -> R.drawable.ic_wx_cloud
     }
 
     internal fun symbolFor(code: Int, isDay: Boolean): String = when (code) {
