@@ -407,7 +407,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
         }
 
         // The fixed top area, frosted over whatever is scrolling beneath it.
-        var headerPull by remember { mutableFloatStateOf(0f) }
         Box(
             Modifier
                 .fillMaxWidth()
@@ -423,14 +422,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         0f to Color.Black,
                         0.82f to Color.Black,
                         1f to Color.Transparent,
-                    )
-                }
-                // Swipe down on the top area to open notifications.
-                .pointerInput(Unit) {
-                    detectVerticalDragGestures(
-                        onDragStart = { headerPull = 0f },
-                        onDragEnd = { if (headerPull > 160f) vm.expandNotifications() },
-                        onVerticalDrag = { _, amount -> headerPull += amount },
                     )
                 }
                 .statusBarsPadding(),
