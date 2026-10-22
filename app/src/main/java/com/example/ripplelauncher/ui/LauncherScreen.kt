@@ -176,6 +176,10 @@ private sealed interface Item {
         override val key = "section_${section.id}"
     }
     /** Shown inside an expanded section that has no apps yet. */
+    /** A section's or Hidden's apps, as an icon grid like the favorites. */
+    data class Grid(val id: String, val apps: List<AppEntry>, val faded: Boolean = false) : Item {
+        override val key = "grid_$id"
+    }
     data class SectionEmpty(val section: Section) : Item {
         override val key = "section_empty_${section.id}"
     }
@@ -229,7 +233,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 list += Item.SectionHeader(section, members.size, open, first = i == 0, last = i == sections.lastIndex)
                 if (open) {
                     if (members.isEmpty()) list += Item.SectionEmpty(section)
-                    else members.forEach { list += Item.App(it, null) }
+                    else list += Item.Grid(section.id, members)
                 }
             }
             if (sections.isNotEmpty()) list += Item.SectionGap
@@ -243,7 +247,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             if (lessUsed.isNotEmpty()) {
                 index[LESS_USED_MARK] = list.size
                 list += Item.LessUsedHeader(lessUsed.size, lessUsedExpanded)
-                if (lessUsedExpanded) lessUsed.forEach { list += Item.App(it, null, lessUsed = true) }
+                if (lessUsedExpanded) list += Item.Grid("hidden", lessUsed, faded = true)
             }
         } else {
             // Search still finds every app, including less-used ones.
@@ -354,6 +358,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     Item.Gap -> Spacer(Modifier.height(16.dp))
                     Item.SectionGap -> Spacer(Modifier.height(10.dp))
                     is Item.Favorites -> FavoriteGrid(item.apps, vm)
+                    is Item.Grid -> Box(if (item.faded) Modifier.alpha(0.8f) else Modifier) {
+                        IconGrid(item.apps, vm)
+                    }
                     is Item.App -> Box(if (item.lessUsed) Modifier.alpha(0.75f) else Modifier) {
                         AppRow(
                             app = item.app,
@@ -900,6 +907,65 @@ private fun FavoriteGrid(favorites: List<AppEntry>, vm: LauncherViewModel) {
             }
         }
     }
+    }
+}
+
+// --- Icon grid for sections and Hidden: same 5 / 4 / 5 layout as the favorites -------
+
+@Composable
+private fun IconGrid(apps: List<AppEntry>, vm: LauncherViewModel) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = Ui.Gutter - 6.dp, end = 0.dp, bottom = 6.dp)
+    ) {
+        BoxWithConstraints(
+            Modifier
+                .fillMaxWidth()
+                .height(FavRowHeight * rowsFor(apps.size))
+        ) {
+            val cell = maxWidth / 5
+            apps.forEachIndexed { i, app ->
+                key(app.key) {
+                    val (row, x) = slotOf(i)
+                    Box(
+                        Modifier.offset(
+                            x = cell * x - FavIconSize / 2,
+                            y = FavRowHeight * (row + 0.5f) - FavIconSize / 2,
+                        )
+                    ) {
+                        GridIcon(app, vm)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun GridIcon(app: AppEntry, vm: LauncherViewModel) {
+    var menuOpen by remember { mutableStateOf(false) }
+    val haptic = LocalHapticFeedback.current
+    val source = remember { MutableInteractionSource() }
+    Box {
+        Image(
+            app.icon,
+            contentDescription = app.label,
+            modifier = Modifier
+                .size(FavIconSize)
+                .pressScale(source, pressed = 0.88f)
+                .combinedClickable(
+                    interactionSource = source,
+                    indication = null,
+                    onClick = { vm.launch(app) },
+                    onLongClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        menuOpen = true
+                    },
+                ),
+        )
+        AppMenu(app, isFavorite = false, vm = vm, expanded = menuOpen, onDismiss = { menuOpen = false })
     }
 }
 
