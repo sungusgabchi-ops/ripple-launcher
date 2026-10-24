@@ -23,6 +23,14 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.SolidColor
 import com.example.ripplelauncher.Backdrop
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.ui.window.Dialog
 import com.example.ripplelauncher.Destination
 import com.example.ripplelauncher.Section
@@ -208,8 +216,17 @@ fun LauncherScreen(vm: LauncherViewModel) {
     var renaming by remember { mutableStateOf<Section?>(null) }
     var deleting by remember { mutableStateOf<Section?>(null) }
 
+    val groupOrder by vm.groupOrder.collectAsStateWithLifecycle()
+    val dots by vm.dotPackages.collectAsStateWithLifecycle()
+    // Saved drag order first; apps never placed yet follow alphabetically.
+    fun ordered(groupId: String, members: List<AppEntry>): List<AppEntry> {
+        val order = groupOrder[groupId] ?: return members
+        val rank = order.withIndex().associate { (i, k) -> k to i }
+        return members.sortedBy { rank[it.key] ?: Int.MAX_VALUE }
+    }
+
     val (items, letterIndex) = remember(
-        apps, favorites, favoriteSet, query, lessUsedKeys, lessUsedExpanded, sections, sectionOf, expandedSections,
+        apps, favorites, favoriteSet, query, lessUsedKeys, lessUsedExpanded, sections, sectionOf, expandedSections, groupOrder,
     ) {
         val list = mutableListOf<Item>()
         val index = mutableMapOf(FAVORITES_MARK to 0)
@@ -233,7 +250,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 list += Item.SectionHeader(section, members.size, open, first = i == 0, last = i == sections.lastIndex)
                 if (open) {
                     if (members.isEmpty()) list += Item.SectionEmpty(section)
-                    else list += Item.Grid(section.id, members)
+                    else list += Item.Grid(section.id, ordered(section.id, members))
                 }
             }
             if (sections.isNotEmpty()) list += Item.SectionGap
@@ -247,7 +264,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             if (lessUsed.isNotEmpty()) {
                 index[LESS_USED_MARK] = list.size
                 list += Item.LessUsedHeader(lessUsed.size, lessUsedExpanded)
-                if (lessUsedExpanded) list += Item.Grid("hidden", lessUsed, faded = true)
+                if (lessUsedExpanded) list += Item.Grid("hidden", ordered("hidden", lessUsed), faded = true)
             }
         } else {
             // Search still finds every app, including less-used ones.
@@ -273,6 +290,14 @@ fun LauncherScreen(vm: LauncherViewModel) {
             listState.animateScrollToItem(0)
         }
     }
+    // Pressing Home folds every section back up, so the screen always starts tidy.
+    val collapseEvents by vm.collapseEvents.collectAsStateWithLifecycle()
+    LaunchedEffect(collapseEvents) {
+        if (collapseEvents > 0) {
+            expandedSections = emptyList()
+            lessUsedExpanded = false
+        }
+    }
 
     val scrolledDown by remember {
         derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0 }
@@ -290,7 +315,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 return Offset.Zero
             }
             override suspend fun onPreFling(available: Velocity): Velocity {
-                if (pulled > 160f) vm.expandNotifications()
+                // Pull down on the list (already at the top) to open search.
+                if (pulled > 160f) vm.openSearch()
                 pulled = 0f
                 return Velocity.Zero
             }
@@ -313,7 +339,32 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val headerHeight = with(LocalDensity.current) { headerPx.toDp() }
     val fade = 28.dp
 
-    Box(Modifier.fillMaxSize().background(animatedScrim)) {
+    val enter = remember { Animatable(1f) }
+    var wasAway by remember { mutableStateOf(false) }
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { wasAway = true }
+    LifecycleEventEffect(Lifecycle.Event.ON_START) {
+        if (wasAway) {
+            wasAway = false
+            scope.launch {
+                enter.snapTo(0f)
+                enter.animateTo(1f, tween(380, easing = FastOutSlowInEasing))
+            }
+        }
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(animatedScrim)
+            .graphicsLayer {
+                val t = enter.value
+                alpha = 0.35f + 0.65f * t
+                val sc = 0.965f + 0.035f * t
+                scaleX = sc
+                scaleY = sc
+                translationY = (1f - t) * 24.dp.toPx()
+            },
+    ) {
         Box(
             Modifier
                 .fillMaxSize()
@@ -357,9 +408,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     )
                     Item.Gap -> Spacer(Modifier.height(16.dp))
                     Item.SectionGap -> Spacer(Modifier.height(10.dp))
-                    is Item.Favorites -> FavoriteGrid(item.apps, vm)
+                    is Item.Favorites -> FavoriteGrid(item.apps, vm, dots)
                     is Item.Grid -> Box(if (item.faded) Modifier.alpha(0.8f) else Modifier) {
-                        IconGrid(item.apps, vm)
+                        ReorderGrid(item.apps, vm, dots, isFavorite = false) { vm.setGroupOrder(item.id, it) }
                     }
                     is Item.App -> Box(if (item.lessUsed) Modifier.alpha(0.75f) else Modifier) {
                         AppRow(
@@ -368,6 +419,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             isFavorite = item.app.key in favoriteSet,
                             vm = vm,
                             big = false,
+                            dot = item.app.component.packageName in dots,
                         )
                     }
                     is Item.LessUsedHeader -> SectionHeader("HIDDEN", item.count, item.expanded, divider = true) {
@@ -557,14 +609,14 @@ private fun WeatherLine(vm: LauncherViewModel, modifier: Modifier = Modifier) {
  */
 @Composable
 private fun BrightnessBar(vm: LauncherViewModel) {
-    var level by remember { mutableFloatStateOf(vm.readBrightness()) }
+    val level by vm.brightness.collectAsStateWithLifecycle()
     var allowed by remember { mutableStateOf(vm.canChangeBrightness()) }
     val haptic = LocalHapticFeedback.current
 
-    // Coming back from Settings (or after brightness changed elsewhere): refresh.
+    // Coming back from Settings: re-check permission and the current value.
     LifecycleResumeEffect(Unit) {
         allowed = vm.canChangeBrightness()
-        level = vm.readBrightness()
+        vm.syncBrightness()
         onPauseOrDispose { }
     }
 
@@ -582,13 +634,16 @@ private fun BrightnessBar(vm: LauncherViewModel) {
             }
             .pointerInput(allowed) {
                 detectHorizontalDragGestures(
-                    onDragStart = { if (!allowed) vm.requestBrightnessPermission() },
-                    onDragEnd = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) },
+                    onDragStart = { if (allowed) vm.startBrightnessDrag() else vm.requestBrightnessPermission() },
+                    onDragEnd = {
+                        vm.endBrightnessDrag()
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    },
+                    onDragCancel = { vm.endBrightnessDrag() },
                 ) { change, dx ->
                     if (allowed) {
                         change.consume()
-                        level = (level + dx / size.width).coerceIn(0.01f, 1f)
-                        vm.setBrightness(level)
+                        vm.setBrightness(vm.brightness.value + dx / size.width)
                     }
                 }
             },
@@ -642,6 +697,15 @@ private fun ActionRow(vm: LauncherViewModel) {
         Box {
             GlassButton(R.drawable.ic_palette, "Appearance") { menuOpen = true }
             RippleMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                val dotsOn by vm.dotsEnabled.collectAsStateWithLifecycle()
+                MenuLabel("Home screen")
+                RippleMenuItem(
+                    text = "Notification dots",
+                    onClick = { vm.toggleDots(); menuOpen = false },
+                    trailing = {
+                        if (dotsOn) Icon(painterResource(R.drawable.ic_check), contentDescription = "On", tint = Accent, modifier = Modifier.size(20.dp))
+                    },
+                )
                 MenuLabel("Background")
                 Backdrop.entries.forEach { option ->
                     RippleMenuItem(
@@ -772,29 +836,78 @@ private fun slotOf(i: Int): Pair<Int, Float> {
 
 private fun rowsFor(n: Int): Int = if (n == 0) 0 else slotOf(n - 1).first + 1
 
+/** Launches an app so it grows out of the icon that was tapped (bounds in window pixels). */
 @Composable
-private fun FavoriteGrid(favorites: List<AppEntry>, vm: LauncherViewModel) {
+private fun rememberLaunch(vm: LauncherViewModel): (AppEntry, androidx.compose.ui.geometry.Rect?) -> Unit {
+    val view = LocalView.current
+    return remember(view, vm) {
+        { app, r ->
+            if (r == null || r.width <= 0f) {
+                vm.launch(app)
+            } else {
+                val x = r.left.roundToInt()
+                val y = r.top.roundToInt()
+                val w = r.width.roundToInt()
+                val h = r.height.roundToInt()
+                val opts = android.app.ActivityOptions.makeScaleUpAnimation(view, x, y, w, h).toBundle()
+                vm.launch(app, android.graphics.Rect(x, y, x + w, y + h), opts)
+            }
+        }
+    }
+}
+
+/** Small accent dot for apps with notifications. */
+@Composable
+private fun NotificationDot(modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .size(9.dp)
+            .border(1.5.dp, Color(0xFF1E2126), CircleShape)
+            .background(Accent, CircleShape),
+    )
+}
+
+@Composable
+private fun FavoriteGrid(favorites: List<AppEntry>, vm: LauncherViewModel, dots: Set<String>) =
+    ReorderGrid(favorites, vm, dots, isFavorite = true, onReorder = vm::setFavoriteOrder)
+
+/**
+ * Icons in a 5 / 4 / 5 grid: favorites, sections and Hidden all use this.
+ * Tap to open. Long-press and drag to reorder. Long-press without moving opens the menu.
+ */
+@Composable
+private fun ReorderGrid(
+    apps: List<AppEntry>,
+    vm: LauncherViewModel,
+    dots: Set<String>,
+    isFavorite: Boolean,
+    onReorder: (List<String>) -> Unit,
+) {
     val haptic = LocalHapticFeedback.current
     val density = LocalDensity.current
+    val launchApp = rememberLaunch(vm)
 
-    // Working order while dragging; resets whenever the saved favorites change.
-    var order by remember(favorites) { mutableStateOf(favorites) }
+    // Working order while dragging. Picks up outside changes (installs, moves) only
+    // when nothing is being dragged, so a background refresh can't snap it back mid-drag.
+    var order by remember { mutableStateOf(apps) }
     var dragKey by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(apps) { if (dragKey == null) order = apps }
     var dragCenter by remember { mutableStateOf(Offset.Zero) }
     var menuKey by remember { mutableStateOf<String?>(null) }
-
     var pressedKey by remember { mutableStateOf<String?>(null) }
+    val origin = remember { floatArrayOf(0f, 0f) } // grid's top-left in the window
 
     // No container: the icons sit straight on the wallpaper, between the gutters.
     Box(
         Modifier
             .fillMaxWidth()
-            .padding(start = Ui.Gutter - 6.dp, end = 0.dp)
+            .padding(start = Ui.Gutter - 6.dp, end = 0.dp, bottom = if (isFavorite) 0.dp else 6.dp)
     ) {
     BoxWithConstraints(
         Modifier
             .fillMaxWidth()
             .height(FavRowHeight * rowsFor(order.size))
+            .onGloballyPositioned { val p = it.positionInWindow(); origin[0] = p.x; origin[1] = p.y }
     ) {
         val cellW = with(density) { maxWidth.toPx() } / 5f
         val rowH = with(density) { FavRowHeight.toPx() }
@@ -807,6 +920,13 @@ private fun FavoriteGrid(favorites: List<AppEntry>, vm: LauncherViewModel) {
         }
         fun nearest(p: Offset): Int =
             order.indices.minByOrNull { (centerOf(it) - p).getDistance() } ?: 0
+        fun boundsOf(i: Int): androidx.compose.ui.geometry.Rect {
+            val c = centerOf(i)
+            return androidx.compose.ui.geometry.Rect(
+                origin[0] + c.x - half, origin[1] + c.y - half,
+                origin[0] + c.x + half, origin[1] + c.y + half,
+            )
+        }
 
         val latestOrder by rememberUpdatedState(order)
 
@@ -830,7 +950,7 @@ private fun FavoriteGrid(favorites: List<AppEntry>, vm: LauncherViewModel) {
                             val up = waitForUpOrCancellation()
                             outcome = if (up != null) { up.consume(); 1 } else 2
                         }
-                        if (outcome == 1) { vm.launch(app); return@awaitEachGesture }
+                        if (outcome == 1) { launchApp(app, boundsOf(hit)); return@awaitEachGesture }
                         if (outcome == 2) return@awaitEachGesture
 
                         // Long press: pick the icon up.
@@ -857,11 +977,12 @@ private fun FavoriteGrid(favorites: List<AppEntry>, vm: LauncherViewModel) {
                             }
                             change.consume()
                         }
-                        dragKey = null
-                        if (moved) vm.setFavoriteOrder(order.map { it.key })
+                        if (moved) onReorder(order.map { it.key })
                         else menuKey = app.key
+                        dragKey = null
                         } finally {
                             pressedKey = null
+                            dragKey = null
                         }
                     }
                 }
@@ -891,15 +1012,14 @@ private fun FavoriteGrid(favorites: List<AppEntry>, vm: LauncherViewModel) {
                             }
                             .zIndex(if (dragging) 1f else 0f)
                     ) {
-                        Image(
-                            app.icon,
-                            contentDescription = app.label,
-                            modifier = Modifier
-                                .size(FavIconSize)
-                                .graphicsLayer { scaleX = scale; scaleY = scale },
-                        )
+                        Box(Modifier.graphicsLayer { scaleX = scale; scaleY = scale }) {
+                            Image(app.icon, contentDescription = app.label, modifier = Modifier.size(FavIconSize))
+                            if (app.component.packageName in dots) {
+                                NotificationDot(Modifier.align(Alignment.TopEnd).offset(x = 2.dp, y = (-2).dp))
+                            }
+                        }
                         AppMenu(
-                            app, isFavorite = true, vm = vm,
+                            app, isFavorite = isFavorite, vm = vm,
                             expanded = menuKey == app.key, onDismiss = { menuKey = null },
                         )
                     }
@@ -907,65 +1027,6 @@ private fun FavoriteGrid(favorites: List<AppEntry>, vm: LauncherViewModel) {
             }
         }
     }
-    }
-}
-
-// --- Icon grid for sections and Hidden: same 5 / 4 / 5 layout as the favorites -------
-
-@Composable
-private fun IconGrid(apps: List<AppEntry>, vm: LauncherViewModel) {
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .padding(start = Ui.Gutter - 6.dp, end = 0.dp, bottom = 6.dp)
-    ) {
-        BoxWithConstraints(
-            Modifier
-                .fillMaxWidth()
-                .height(FavRowHeight * rowsFor(apps.size))
-        ) {
-            val cell = maxWidth / 5
-            apps.forEachIndexed { i, app ->
-                key(app.key) {
-                    val (row, x) = slotOf(i)
-                    Box(
-                        Modifier.offset(
-                            x = cell * x - FavIconSize / 2,
-                            y = FavRowHeight * (row + 0.5f) - FavIconSize / 2,
-                        )
-                    ) {
-                        GridIcon(app, vm)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun GridIcon(app: AppEntry, vm: LauncherViewModel) {
-    var menuOpen by remember { mutableStateOf(false) }
-    val haptic = LocalHapticFeedback.current
-    val source = remember { MutableInteractionSource() }
-    Box {
-        Image(
-            app.icon,
-            contentDescription = app.label,
-            modifier = Modifier
-                .size(FavIconSize)
-                .pressScale(source, pressed = 0.88f)
-                .combinedClickable(
-                    interactionSource = source,
-                    indication = null,
-                    onClick = { vm.launch(app) },
-                    onLongClick = {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        menuOpen = true
-                    },
-                ),
-        )
-        AppMenu(app, isFavorite = false, vm = vm, expanded = menuOpen, onDismiss = { menuOpen = false })
     }
 }
 
@@ -981,10 +1042,13 @@ private fun AppRow(
     big: Boolean,
     canMoveUp: Boolean = false,
     canMoveDown: Boolean = false,
+    dot: Boolean = false,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val haptic = LocalHapticFeedback.current
     val source = remember { MutableInteractionSource() }
+    val launchApp = rememberLaunch(vm)
+    val iconBounds = remember { arrayOfNulls<androidx.compose.ui.geometry.Rect>(1) }
     val pressed by source.collectIsPressedAsState()
     val highlight by animateColorAsState(
         if (pressed || menuOpen) Color.White.copy(alpha = 0.08f) else Color.Transparent,
@@ -1004,7 +1068,7 @@ private fun AppRow(
                 .combinedClickable(
                     interactionSource = source,
                     indication = null,
-                    onClick = { vm.launch(app) },
+                    onClick = { launchApp(app, iconBounds[0]) },
                     onLongClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         menuOpen = true
@@ -1019,7 +1083,10 @@ private fun AppRow(
                 if (letter != null) Text(letter.toString(), style = Type.Label.copy(fontSize = 13.sp, letterSpacing = 0.sp), color = Accent)
             }
             Spacer(Modifier.width(8.dp))
-            Image(app.icon, contentDescription = null, modifier = Modifier.size(32.dp))
+            Box(Modifier.onGloballyPositioned { iconBounds[0] = it.boundsInWindow() }) {
+                Image(app.icon, contentDescription = null, modifier = Modifier.size(32.dp))
+                if (dot) NotificationDot(Modifier.align(Alignment.TopEnd).offset(x = 2.dp, y = (-2).dp))
+            }
             Spacer(Modifier.width(14.dp))
             Text(app.label, style = Type.Body, color = Ui.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
@@ -1121,14 +1188,15 @@ private fun AppMenu(
 ) {
     // Page 0: actions. Page 1: "Move to…" destinations. Resets each time the menu opens.
     var page by remember(expanded) { mutableStateOf(0) }
-    val sections by vm.sections.collectAsStateWithLifecycle()
-    // Re-read when these change so the checkmark is right.
-    vm.favoriteKeys.collectAsStateWithLifecycle().value
-    vm.sectionOf.collectAsStateWithLifecycle().value
-    vm.lessUsedKeys.collectAsStateWithLifecycle().value
-    val current = vm.destinationOf(app)
 
     RippleMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        // Read inside the menu so closed menus (one per app) cost nothing while scrolling.
+        val sections by vm.sections.collectAsStateWithLifecycle()
+        vm.favoriteKeys.collectAsStateWithLifecycle().value
+        vm.sectionOf.collectAsStateWithLifecycle().value
+        vm.lessUsedKeys.collectAsStateWithLifecycle().value
+        val current = vm.destinationOf(app)
+
         if (page == 0) {
             MenuLabel(app.label)
             RippleMenuItem(if (isFavorite) "Remove from favorites" else "Add to favorites", { onDismiss(); vm.toggleFavorite(app) })

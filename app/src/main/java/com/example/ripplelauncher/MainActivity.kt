@@ -31,6 +31,6 @@ class MainActivity : ComponentActivity() {
     // Pressing Home while the launcher is already open lands here.
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        vm.goHome()
+        vm.goHome(collapse = true)
     }
 }

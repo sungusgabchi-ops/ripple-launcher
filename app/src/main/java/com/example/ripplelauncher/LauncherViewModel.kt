@@ -109,6 +109,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         launcherApps.unregisterCallback(packageCallback)
+        getApplication<Application>().contentResolver.unregisterContentObserver(brightnessObserver)
     }
 
     /** Reloads the app list. [changedPackage] gets its icon redrawn even if its version didn't change. */
@@ -174,11 +175,16 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
 
     // --- Navigation -------------------------------------------------------
 
-    fun goHome() {
+    fun goHome(collapse: Boolean = false) {
         _query.value = ""
         _searchOpen.value = false
         _homeEvents.value++
+        if (collapse) _collapseEvents.value++
     }
+
+    // Bumped when the Home button is pressed: sections fold back up.
+    private val _collapseEvents = MutableStateFlow(0)
+    val collapseEvents: StateFlow<Int> = _collapseEvents.asStateFlow()
 
     // The search box is hidden behind a search icon until tapped.
     private val _searchOpen = MutableStateFlow(false)
@@ -270,18 +276,99 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // The bar follows the real brightness, including changes made in quick settings
+    // or by auto-brightness while the home screen is open.
+    private val _brightness = MutableStateFlow(readBrightness())
+    val brightness: StateFlow<Float> = _brightness.asStateFlow()
+    private var brightnessDragging = false
+    private val brightnessTarget = MutableStateFlow<Float?>(null)
+
+    private val brightnessObserver = object : android.database.ContentObserver(Handler(Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) {
+            if (!brightnessDragging) _brightness.value = readBrightness()
+        }
+    }
+
+    init {
+        getApplication<Application>().contentResolver.registerContentObserver(
+            android.provider.Settings.System.getUriFor(android.provider.Settings.System.SCREEN_BRIGHTNESS),
+            false,
+            brightnessObserver,
+        )
+        // Writes happen off the main thread, at most ~30 times a second, always the latest value.
+        viewModelScope.launch(Dispatchers.IO) {
+            brightnessTarget.collect { level ->
+                if (level == null) return@collect
+                val raw = (level.coerceIn(0f, 1f).let { it * it } * 255f).toInt().coerceIn(1, 255)
+                try {
+                    android.provider.Settings.System.putInt(
+                        getApplication<Application>().contentResolver,
+                        android.provider.Settings.System.SCREEN_BRIGHTNESS,
+                        raw,
+                    )
+                } catch (_: Exception) {
+                }
+                delay(33)
+            }
+        }
+    }
+
+    fun syncBrightness() {
+        if (!brightnessDragging) _brightness.value = readBrightness()
+    }
+
+    fun startBrightnessDrag() {
+        brightnessDragging = true
+        // Dragging means "manual": switch off adaptive brightness once, not on every move.
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                android.provider.Settings.System.putInt(
+                    getApplication<Application>().contentResolver,
+                    android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE,
+                    android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL,
+                )
+            } catch (_: Exception) {
+            }
+        }
+    }
+
     fun setBrightness(level: Float) {
-        val resolver = getApplication<Application>().contentResolver
-        val raw = (level.coerceIn(0f, 1f).let { it * it } * 255f).toInt().coerceIn(1, 255)
-        try {
-            // Dragging the slider means "manual": switch off adaptive brightness first.
-            android.provider.Settings.System.putInt(
-                resolver,
-                android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE,
-                android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL,
-            )
-            android.provider.Settings.System.putInt(resolver, android.provider.Settings.System.SCREEN_BRIGHTNESS, raw)
-        } catch (_: Exception) {
+        _brightness.value = level.coerceIn(0.01f, 1f)
+        brightnessTarget.value = _brightness.value
+    }
+
+    fun endBrightnessDrag() {
+        brightnessDragging = false
+    }
+
+    // --- Notification dots ----------------------------------------------------
+
+    private val _dotsEnabled = MutableStateFlow(prefs.getBoolean(KEY_DOTS, false))
+    val dotsEnabled: StateFlow<Boolean> = _dotsEnabled.asStateFlow()
+
+    /** Packages that currently have notifications, if dots are on. */
+    val dotPackages: StateFlow<Set<String>> =
+        combine(NotifDotService.active, _dotsEnabled) { active, on -> if (on) active else emptySet() }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
+
+    fun dotsAllowed(): Boolean =
+        androidx.core.app.NotificationManagerCompat.getEnabledListenerPackages(getApplication())
+            .contains(getApplication<Application>().packageName)
+
+    fun toggleDots() {
+        val on = !_dotsEnabled.value
+        _dotsEnabled.value = on
+        prefs.edit().putBoolean(KEY_DOTS, on).apply()
+        if (on && !dotsAllowed()) {
+            try {
+                getApplication<Application>().startActivity(
+                    Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+                toast("Allow notification access for Ripple to show dots")
+            } catch (_: Exception) {
+                toast("Couldn't open notification access settings")
+            }
         }
     }
 
@@ -374,9 +461,10 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun launch(app: AppEntry) {
+    /** [sourceBounds] and [options] make the app grow out of the tapped icon. */
+    fun launch(app: AppEntry, sourceBounds: android.graphics.Rect? = null, options: android.os.Bundle? = null) {
         try {
-            launcherApps.startMainActivity(app.component, app.user, null, null)
+            launcherApps.startMainActivity(app.component, app.user, sourceBounds, options)
         } catch (e: Exception) {
             toast("Couldn't open ${app.label}")
         }
@@ -462,6 +550,29 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
 
     fun toggleFavorite(app: AppEntry) =
         moveApp(app, if (destinationOf(app) == Destination.Favorites) Destination.List else Destination.Favorites)
+
+    // --- Order inside sections and Hidden (drag to reorder) ------------------
+
+    private val _groupOrder = MutableStateFlow(loadGroupOrder())
+    val groupOrder: StateFlow<Map<String, List<String>>> = _groupOrder.asStateFlow()
+
+    fun setGroupOrder(groupId: String, keys: List<String>) {
+        val next = _groupOrder.value + (groupId to keys)
+        _groupOrder.value = next
+        val o = org.json.JSONObject()
+        next.forEach { (id, list) -> o.put(id, org.json.JSONArray(list)) }
+        prefs.edit().putString(KEY_GROUP_ORDER, o.toString()).apply()
+    }
+
+    private fun loadGroupOrder(): Map<String, List<String>> = try {
+        val o = org.json.JSONObject(prefs.getString(KEY_GROUP_ORDER, null) ?: "{}")
+        o.keys().asSequence().associateWith { id ->
+            val a = o.getJSONArray(id)
+            List(a.length()) { a.getString(it) }
+        }
+    } catch (_: Exception) {
+        emptyMap()
+    }
 
     // --- Sections -----------------------------------------------------------
 
@@ -578,6 +689,8 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         const val KEY_SECONDARY = "secondary"   // old, read once for migration
         const val KEY_SECTIONS = "sections"
         const val KEY_SECTION_APPS = "section_apps"
+        const val KEY_GROUP_ORDER = "group_order"
+        const val KEY_DOTS = "notification_dots"
         const val SECONDARY_ID = "secondary"
 
         // In the companion so it's ready before init{} reads the saved list.
