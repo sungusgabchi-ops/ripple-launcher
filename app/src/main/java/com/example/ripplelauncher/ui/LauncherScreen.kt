@@ -812,27 +812,14 @@ private fun Clock(modifier: Modifier = Modifier, onClick: () -> Unit) {
     }
 }
 
-// --- Favorites grid: icons only, 5 / 4 / 5 like a honeycomb ----------------
+// --- Favorites grid: icons only, 5 columns ----------------
 // Tap to open. Long-press and drag to reorder. Long-press without moving opens the menu.
 
 private val FavRowHeight = 60.dp
 private val FavIconSize = 40.dp
 
-/** Row and horizontal position (in cell widths) of favorite number [i]. */
-private fun slotOf(i: Int): Pair<Int, Float> {
-    var row = 0
-    var start = 0
-    while (true) {
-        val size = if (row % 2 == 0) 5 else 4
-        if (i < start + size) {
-            val col = i - start
-            // A 4-icon row is shifted half a cell so it sits between the rows above and below.
-            return row to (if (size == 5) col + 0.5f else col + 1f)
-        }
-        start += size
-        row++
-    }
-}
+/** Row and horizontal position (in cell widths) of icon number [i]: a plain 5-column grid. */
+private fun slotOf(i: Int): Pair<Int, Float> = (i / 5) to (i % 5 + 0.5f)
 
 private fun rowsFor(n: Int): Int = if (n == 0) 0 else slotOf(n - 1).first + 1
 
@@ -872,7 +859,7 @@ private fun FavoriteGrid(favorites: List<AppEntry>, vm: LauncherViewModel, dots:
     ReorderGrid(favorites, vm, dots, isFavorite = true, onReorder = vm::setFavoriteOrder)
 
 /**
- * Icons in a 5 / 4 / 5 grid: favorites, sections and Hidden all use this.
+ * Icons in a 5-column grid: favorites, sections and Hidden all use this.
  * Tap to open. Long-press and drag to reorder. Long-press without moving opens the menu.
  */
 @Composable
